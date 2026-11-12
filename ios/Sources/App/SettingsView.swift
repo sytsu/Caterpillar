@@ -105,7 +105,7 @@ struct SettingsView: View {
         } header: {
             Text("General")
         } footer: {
-            Text("Diagnostics keeps boot_status.txt and a screenshot of the first minutes in the Caterpillar folder.")
+            Text("The Shared folder in Files › Caterpillar is reachable from Windows at http://10.0.2.4/. Diagnostics keeps boot_status.txt and a screenshot of the first minutes in the Caterpillar folder.")
         }
     }
 

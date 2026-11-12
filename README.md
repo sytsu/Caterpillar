@@ -100,6 +100,13 @@ on Caterpillar's first screen, or put it at `Files › Caterpillar › Machines 
 A Windows 11 ARM64 image installed elsewhere, for example in a virtual machine on a Mac, also boots
 as long as Windows is on a GPT disk and was not encrypted with BitLocker.
 
+### Sharing files
+
+`Files › Caterpillar › Shared` on the device is a folder Windows can reach over its virtual network at
+`http://10.0.2.4/` (WebDAV). Open that address in a browser inside Windows to download files, or map it
+as a network drive: `net use Z: \\10.0.2.4\DavWWWRoot`. Mapping needs Windows' WebClient service,
+which a trimmed-down image may have turned off.
+
 ### If Windows does not fill the picture
 
 Windows remembers the desktop size it last used with its basic display driver, and applies it on any
