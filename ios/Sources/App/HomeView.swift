@@ -136,6 +136,14 @@ struct HomeView: View {
                 }
                 .padding(14)
                 .background(Palette.card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            case .starting:
+                HStack(spacing: 12) {
+                    ProgressView()
+                    Text("Starting").font(.body.weight(.medium))
+                    Spacer()
+                }
+                .padding(14)
+                .background(Palette.card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
             case .unpacking:
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Unpacking the disk image").font(.body.weight(.medium))

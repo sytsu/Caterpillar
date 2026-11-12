@@ -42,7 +42,7 @@ targets:
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         LSRequiresIPhoneOS: true
         UILaunchScreen:
-          UIColorName: ""
+          UIColorName: LaunchBackground
         UIFileSharingEnabled: true
         LSSupportsOpeningDocumentsInPlace: true
         UIStatusBarHidden: true

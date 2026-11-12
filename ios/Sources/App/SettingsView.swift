@@ -40,6 +40,11 @@ struct SettingsView: View {
             if let plan = vm.plan {
                 LabeledContent("Windows will use", value: plan.label)
             }
+            Picker("Orientation", selection: $settings.orientation) {
+                ForEach(OrientationLock.allCases) { lock in
+                    Text(lock.title).tag(lock)
+                }
+            }
             Toggle("Crisp pixels", isOn: $settings.sharpPixels)
             Toggle("Limit to 30 frames a second", isOn: $settings.limitTo30)
             Toggle("Show frame rate", isOn: $settings.showStats)

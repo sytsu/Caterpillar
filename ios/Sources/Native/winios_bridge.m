@@ -38,11 +38,13 @@ static WinIOSBridge *s_shared_bridge = nil;
     NSInteger _hingeStatus;
     double _hingeAngleDegrees;
     BOOL _diagnosticsEnabled;
+    BOOL _starting;
 }
 - (void)handleVMExitWithReason:(NSString *)reason;
 - (void)updateUnpackProgress:(double)frac;
 - (void)startDiagTimer;
 - (void)stopDiagTimer;
+- (void)finishStart;
 @end
 
 static void vm_exit_trampoline(int reason) {
@@ -170,8 +172,7 @@ static void unpack_progress_cb(uint64_t done, uint64_t total, void *opaque) {
 
 - (void)installTrapGuard {
     winios_jit_install_trap_handler();
-    [[UIApplication sharedApplication] setIdleTimerDisabled:YES];
-    [self configureAudioSessionAndMicPermission];
+    /* The microphone is asked for when Windows starts, not when the app opens. */
     UIScreen *mainScreen = [UIScreen mainScreen];
     [self updateScreenSize:mainScreen.bounds.size scale:mainScreen.scale];
     [self notifyChanged];
@@ -201,6 +202,10 @@ static void unpack_progress_cb(uint64_t done, uint64_t total, void *opaque) {
 
 - (BOOL)isUnpacking {
     return _unpacking;
+}
+
+- (BOOL)isStarting {
+    return _starting;
 }
 
 - (double)unpackProgress {
@@ -366,7 +371,7 @@ static void unpack_progress_cb(uint64_t done, uint64_t total, void *opaque) {
 
 - (void)prepareAndStartWithLayer:(nullable CAMetalLayer *)layer {
     if (layer) _pendingLayer = layer;
-    if (_vmRunning || _unpacking) return;
+    if (_vmRunning || _unpacking || _starting) return;
 
     if (!self.isJITLive) {
         [self tryAcquireJIT:YES];
@@ -425,7 +430,7 @@ static void unpack_progress_cb(uint64_t done, uint64_t total, void *opaque) {
 }
 
 - (void)startConfiguredVMInDirectory:(NSString *)dir {
-    if (_vmRunning) return;
+    if (_vmRunning || _starting) return;
     [self configureAudioSessionAndMicPermission];
 
     WinIosDualMapping jit = winios_jit_mapping();
@@ -472,35 +477,52 @@ static void unpack_progress_cb(uint64_t done, uint64_t total, void *opaque) {
     _configuredRamMB = ramMB;
     _configuredCPUs = _preferredCPUs >= 1 ? MIN(_preferredCPUs, 8) : 4;
 
-    HvWinVmConfig cfg = {
-        .code_fd = codePath.fileSystemRepresentation,
-        .vars_fd = varsPath.fileSystemRepresentation,
-        .disk0 = diskPath.fileSystemRepresentation,
-        .disk1 = NULL,
-        .share_dir = sharedDir.fileSystemRepresentation,
-        .share_sock = shareSock.fileSystemRepresentation,
-        .ncpus = _configuredCPUs,
-        .ram_mb = _configuredRamMB,
-        .jit_bytes = jit.size,
-        .jit_rx = jit.rx_addr,
-        .jit_rw = jit.rw_addr,
-        .prealloc_ram = preallocRam,
-        .no_net = 0,
-        .enable_sound = 1,
-        .log = 0,
-        .stats_interval = 0,
-        .fb_width = _preferredWidth,
-        .fb_height = _preferredHeight,
-    };
+    /* Creating the machine opens the disk and maps the firmware and guest RAM, which can take a
+       moment on a busy disk: do it off the main thread so the app keeps drawing. */
+    _starting = YES;
+    _vmStatus = @"Starting";
+    [self notifyChanged];
 
-    char err[256] = {0};
-    if (hv_winvm_create(&cfg, err, sizeof err) != 0) {
-        _vmStatus = [NSString stringWithFormat:@"Could not start: %s", err];
-        dispatch_async(_diagQueue, ^{ [self writeDiagnosticsSnapshot]; });
-        [self notifyChanged];
-        return;
-    }
+    int cpus = _configuredCPUs;
+    uint32_t fbW = _preferredWidth, fbH = _preferredHeight;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        HvWinVmConfig cfg = {
+            .code_fd = codePath.fileSystemRepresentation,
+            .vars_fd = varsPath.fileSystemRepresentation,
+            .disk0 = diskPath.fileSystemRepresentation,
+            .disk1 = NULL,
+            .share_dir = sharedDir.fileSystemRepresentation,
+            .share_sock = shareSock.fileSystemRepresentation,
+            .ncpus = cpus,
+            .ram_mb = ramMB,
+            .jit_bytes = jit.size,
+            .jit_rx = jit.rx_addr,
+            .jit_rw = jit.rw_addr,
+            .prealloc_ram = preallocRam,
+            .no_net = 0,
+            .enable_sound = 1,
+            .log = 0,
+            .stats_interval = 0,
+            .fb_width = fbW,
+            .fb_height = fbH,
+        };
+        char err[256] = {0};
+        int rc = hv_winvm_create(&cfg, err, sizeof err);
+        NSString *message = [NSString stringWithUTF8String:err] ?: @"";
+        dispatch_async(dispatch_get_main_queue(), ^{
+            self->_starting = NO;
+            if (rc != 0) {
+                self->_vmStatus = [NSString stringWithFormat:@"Could not start: %@", message];
+                dispatch_async(self->_diagQueue, ^{ [self writeDiagnosticsSnapshot]; });
+                [self notifyChanged];
+                return;
+            }
+            [self finishStart];
+        });
+    });
+}
 
+- (void)finishStart {
     CAMetalLayer *layer = _pendingLayer;
     if (layer) {
         hv_winvm_set_display_layer((__bridge void *)layer);

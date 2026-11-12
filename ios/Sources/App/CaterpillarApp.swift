@@ -1,8 +1,27 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 import SwiftUI
+import UIKit
+
+final class AppDelegate: NSObject, UIApplicationDelegate {
+    func application(_ application: UIApplication, supportedInterfaceOrientationsFor window: UIWindow?) -> UIInterfaceOrientationMask {
+        AppSettings.shared.orientation.mask
+    }
+
+    /// Turn the interface to match the orientation setting.
+    static func applyOrientation() {
+        let mask = AppSettings.shared.orientation.mask
+        for case let scene as UIWindowScene in UIApplication.shared.connectedScenes {
+            for window in scene.windows {
+                window.rootViewController?.setNeedsUpdateOfSupportedInterfaceOrientations()
+            }
+            scene.requestGeometryUpdate(.iOS(interfaceOrientations: mask)) { _ in }
+        }
+    }
+}
 
 @main
 struct CaterpillarApp: App {
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @StateObject private var vm = VMController()
     @Environment(\.scenePhase) private var scenePhase
 
@@ -12,8 +31,12 @@ struct CaterpillarApp: App {
                 .preferredColorScheme(.dark)
                 .tint(Palette.accent)
                 .onChange(of: scenePhase) { _, phase in
-                    if phase == .active { vm.appBecameActive() }
+                    if phase == .active {
+                        AppDelegate.applyOrientation()
+                        vm.appBecameActive()
+                    }
                 }
+                .onChange(of: vm.settings.orientation) { _, _ in AppDelegate.applyOrientation() }
         }
     }
 }

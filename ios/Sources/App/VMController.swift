@@ -14,6 +14,7 @@ final class VMController: ObservableObject {
         case idle              // nothing running yet
         case waitingForJIT     // Start was tapped; waiting for the debugger to grant JIT
         case unpacking         // windows11.hvsparse is being expanded
+        case starting          // the machine is being created
         case running
         case stopped(String)   // ran and ended; the reason
     }
@@ -69,7 +70,9 @@ final class VMController: ObservableObject {
     }
 
     var machineFolder: String { bridge.machineDirectory }
-    var canStart: Bool { hasDisk && hasFirmware && phase != .running && phase != .unpacking && !importing }
+    var canStart: Bool {
+        hasDisk && hasFirmware && phase != .running && phase != .unpacking && phase != .starting && !importing
+    }
     var configuredRamMB: Int { Int(bridge.configuredRamMB) }
     var configuredCores: Int { Int(bridge.configuredCPUs) }
 
@@ -243,6 +246,8 @@ final class VMController: ObservableObject {
             if size != guestSize { guestSize = size }
         } else if bridge.isUnpacking {
             phase = .unpacking
+        } else if bridge.isStarting {
+            phase = .starting
         } else if everRan {
             phase = .stopped(bridge.vmStatusText)
             guestSize = .zero

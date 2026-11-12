@@ -15,6 +15,7 @@ typedef void (^WinIOSStateCallback)(void);
 @property (nonatomic, readonly) BOOL isDebuggerAttached;
 @property (nonatomic, readonly) BOOL isVMRunning;
 @property (nonatomic, readonly) BOOL isUnpacking;
+@property (nonatomic, readonly) BOOL isStarting;   /* the machine is being created */
 @property (nonatomic, readonly) double unpackProgress;
 @property (nonatomic, readonly) NSString *jitStatusText;
 @property (nonatomic, readonly) NSString *vmStatusText;

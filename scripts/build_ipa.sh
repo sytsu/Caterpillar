@@ -24,25 +24,37 @@ bash scripts/fetch_firmware.sh
 make -j"$(sysctl -n hw.ncpu)" "$LIB_TARGET"
 xcodegen generate --quiet --spec ios/project.yml
 
+# Keep the full log; print only the result, or the errors if there are any.
+run_xcodebuild() {
+    local log="build/xcodebuild-$VARIANT.log"
+    mkdir -p build
+    if ! xcodebuild "$@" > "$log" 2>&1; then
+        grep -E "error:|ld: |Undefined symbols" "$log" | sort -u | head -n 40 >&2
+        echo "xcodebuild failed; full log in $log" >&2
+        exit 1
+    fi
+    tail -n 2 "$log"
+}
+
 OVERRIDES=()
 [ -n "${BUNDLE_ID:-}" ] && OVERRIDES+=("PRODUCT_BUNDLE_IDENTIFIER=$BUNDLE_ID")
 [ -n "${VERSION:-}" ] && OVERRIDES+=("MARKETING_VERSION=$VERSION")
 [ -n "${BUILD_NUMBER:-}" ] && OVERRIDES+=("CURRENT_PROJECT_VERSION=$BUILD_NUMBER")
 
 if [ "$VARIANT" = simulator ]; then
-    xcodebuild -project ios/Caterpillar.xcodeproj -scheme Caterpillar -configuration Debug \
+    run_xcodebuild -project ios/Caterpillar.xcodeproj -scheme Caterpillar -configuration Debug \
         -sdk iphonesimulator -arch arm64 -derivedDataPath build/DerivedData-sim \
-        ONLY_ACTIVE_ARCH=YES ${OVERRIDES[@]+"${OVERRIDES[@]}"} build | tail -n 3
+        ONLY_ACTIVE_ARCH=YES ${OVERRIDES[@]+"${OVERRIDES[@]}"} build
     rm -rf build/sim && mkdir -p build/sim
     cp -R build/DerivedData-sim/Build/Products/Debug-iphonesimulator/Caterpillar.app build/sim/
     echo "built build/sim/Caterpillar.app"
     exit 0
 fi
 
-xcodebuild -project ios/Caterpillar.xcodeproj -scheme Caterpillar -configuration Release \
+run_xcodebuild -project ios/Caterpillar.xcodeproj -scheme Caterpillar -configuration Release \
     -sdk iphoneos -arch arm64 -derivedDataPath build/DerivedData \
     CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
-    ${OVERRIDES[@]+"${OVERRIDES[@]}"} build | tail -n 3
+    ${OVERRIDES[@]+"${OVERRIDES[@]}"} build
 
 APP="build/DerivedData/Build/Products/Release-iphoneos/Caterpillar.app"
 [ -d "$APP" ] || { echo "build produced no app" >&2; exit 1; }

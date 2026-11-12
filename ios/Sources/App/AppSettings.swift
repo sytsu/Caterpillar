@@ -44,6 +44,28 @@ enum DisplayFit: String, CaseIterable, Identifiable {
     }
 }
 
+enum OrientationLock: String, CaseIterable, Identifiable {
+    case auto, landscape, portrait
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .auto: return "Follow the device"
+        case .landscape: return "Landscape"
+        case .portrait: return "Portrait"
+        }
+    }
+
+    var mask: UIInterfaceOrientationMask {
+        switch self {
+        case .auto: return UIDevice.current.userInterfaceIdiom == .phone ? .allButUpsideDown : .all
+        case .landscape: return .landscape
+        case .portrait: return .portrait
+        }
+    }
+}
+
 enum TouchMode: String, CaseIterable, Identifiable {
     case direct, trackpad
 
@@ -74,6 +96,7 @@ final class AppSettings: ObservableObject {
     @Published var sharpPixels: Bool { didSet { store.set(sharpPixels, forKey: "display.sharpPixels") } }
     @Published var limitTo30: Bool { didSet { store.set(limitTo30, forKey: "display.limitTo30") } }
     @Published var showStats: Bool { didSet { store.set(showStats, forKey: "display.showStats") } }
+    @Published var orientation: OrientationLock { didSet { store.set(orientation.rawValue, forKey: "display.orientation") } }
 
     /// 0 means "as much as the device allows".
     @Published var ramMB: Int { didSet { store.set(ramMB, forKey: "machine.ramMB") } }
@@ -94,6 +117,7 @@ final class AppSettings: ObservableObject {
         sharpPixels = store.bool(forKey: "display.sharpPixels")
         limitTo30 = store.bool(forKey: "display.limitTo30")
         showStats = store.bool(forKey: "display.showStats")
+        orientation = OrientationLock(rawValue: store.string(forKey: "display.orientation") ?? "") ?? .auto
         ramMB = store.integer(forKey: "machine.ramMB")
         cores = store.object(forKey: "machine.cores") as? Int ?? 4
         touchMode = TouchMode(rawValue: store.string(forKey: "input.touchMode") ?? "") ?? .direct
