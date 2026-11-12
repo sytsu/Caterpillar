@@ -80,6 +80,13 @@ final class SmokeTests: XCTestCase {
         app.buttons["Save Screenshot"].tap()
         sleep(1)
         shot("landscape-toast")
+
+        // Pull the plug, and check the app says so instead of hanging or crashing.
+        app.buttons["Menu"].tap()
+        app.buttons["Force Stop…"].tap()
+        app.buttons["Force Stop"].firstMatch.tap()
+        XCTAssertTrue(app.buttons["Close Caterpillar"].waitForExistence(timeout: 20), "stopped screen did not appear")
+        shot("landscape-stopped")
     }
 
     func testPortraitSession() {

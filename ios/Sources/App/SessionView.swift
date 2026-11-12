@@ -112,7 +112,7 @@ struct SessionView: View {
             .offset(x: frame.minX, y: frame.minY - lift)
 
         // With the keyboard up there is no room for the column; the key bar has what is needed.
-        if keyboardHeight == 0 {
+        if keyboardHeight == 0, vm.phase == .running {
             controls(vertical: true)
                 .opacity(margin >= columnWidth ? 1 : 0.7)
                 .frame(width: columnWidth, height: full.height)
@@ -134,9 +134,11 @@ struct SessionView: View {
             .frame(width: frame.width, height: frame.height)
             .offset(x: 0, y: frame.minY)
 
-        controls(vertical: false)
-            .frame(width: full.width, height: barHeight)
-            .offset(x: 0, y: frame.maxY)
+        if vm.phase == .running {
+            controls(vertical: false)
+                .frame(width: full.width, height: barHeight)
+                .offset(x: 0, y: frame.maxY)
+        }
 
         if padHeight > 60 {
             ZStack {
@@ -258,7 +260,8 @@ struct SessionView: View {
         if case .stopped(let reason) = vm.phase {
             VStack(spacing: 14) {
                 Text("Windows has stopped").font(.headline)
-                Text("\(reason)\nTo start it again, close Caterpillar and open it.")
+                // "halt" is the ordinary end: Windows shut down, or was stopped from the menu.
+                Text((reason.contains("halt") ? "" : reason + "\n") + "To start it again, close Caterpillar and open it.")
                     .font(.footnote)
                     .multilineTextAlignment(.center)
                     .foregroundStyle(Palette.secondaryText)
