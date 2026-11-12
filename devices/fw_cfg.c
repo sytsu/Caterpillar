@@ -127,6 +127,68 @@ static void run_dma(HvFwCfg *fc, uint64_t dma_pa) {
     hv_phys_write(fc->m, dma_pa, &done_be, 4);
 }
 
+/* ---- Preferred GOP mode: rewrite QemuRamfbDxe's mode table in guest RAM ----
+   EFI_GRAPHICS_OUTPUT_MODE_INFORMATION is 36 bytes: Version, HorizontalResolution,
+   VerticalResolution, PixelFormat, 4 x mask, PixelsPerScanLine (all little-endian u32). */
+#define GOP_INFO_SIZE 36u
+#define GOP_SCAN_BACK (256u << 10)
+#define GOP_SCAN_LEN  (512u << 10)
+
+static const uint32_t gop_stock[3][2] = {{640, 480}, {800, 600}, {1024, 768}};
+
+static int gop_entry_is(const uint8_t *p, uint32_t w, uint32_t h) {
+    uint32_t v[3];
+    memcpy(v, p, sizeof v);
+    return v[0] == 0 && v[1] == w && v[2] == h;
+}
+
+static int gop_table_is_stock(const uint8_t *p) {
+    for (unsigned i = 0; i < 3; i++)
+        if (!gop_entry_is(p + i * GOP_INFO_SIZE, gop_stock[i][0], gop_stock[i][1])) return 0;
+    return 1;
+}
+
+static void gop_table_rewrite(HvFwCfg *fc, uint8_t *p, uint64_t pa) {
+    for (unsigned i = 0; i < 3; i++) {
+        memcpy(p + i * GOP_INFO_SIZE + 4, &fc->gop_w, 4);
+        memcpy(p + i * GOP_INFO_SIZE + 8, &fc->gop_h, 4);
+    }
+    fc->gop_table_pa = pa;
+    fc->gop_patches++;
+    fprintf(stderr, "winvm: GOP mode table at PA 0x%llx set to %ux%u\n",
+            (unsigned long long)pa, fc->gop_w, fc->gop_h);
+}
+
+static void gop_apply(HvFwCfg *fc) {
+    if (!fc->gop_w || !fc->gop_h || !hv_self) return;
+
+    /* UEFI runs identity-mapped, so the caller's PC is a physical address inside its own image
+       (QemuFwCfgLib is linked into every driver). Search around it for the stock table. This runs
+       on every fw_cfg write rather than once: drivers are loaded into pages we may already have
+       looked at, and a firmware reboot loads a fresh, unpatched copy. The window is small, and
+       once an OS is up the PC is a virtual address that is not guest RAM, so it costs nothing. */
+    uint64_t page = hv_self->pc & ~0xfffull;
+    uint64_t lo = page > GOP_SCAN_BACK ? page - GOP_SCAN_BACK : 0;
+    uint8_t *win = hv_phys_ptr(fc->m, lo, GOP_SCAN_LEN);
+    if (!win) return;
+
+    uint32_t first[3] = {0, gop_stock[0][0], gop_stock[0][1]};
+    const uint8_t *end = win + GOP_SCAN_LEN - 3 * GOP_INFO_SIZE;
+    for (uint8_t *p = win; p <= end; p += 4) {
+        if (memcmp(p, first, sizeof first)) continue;
+        if (!gop_table_is_stock(p)) continue;
+        gop_table_rewrite(fc, p, lo + (uint64_t)(p - win));
+        return;
+    }
+}
+
+void hv_fw_cfg_set_gop_mode(HvFwCfg *fc, uint32_t w, uint32_t h) {
+    if (!fc) return;
+    fc->gop_w = w;
+    fc->gop_h = h;
+    fc->gop_table_pa = 0;
+}
+
 static uint64_t fw_cfg_read(void *opaque, uint64_t off, unsigned size) {
     HvFwCfg *fc = opaque;
     if (off < 8) {
@@ -154,6 +216,7 @@ static uint64_t fw_cfg_read(void *opaque, uint64_t off, unsigned size) {
 
 static void fw_cfg_write(void *opaque, uint64_t off, uint64_t val, unsigned size) {
     HvFwCfg *fc = opaque;
+    gop_apply(fc);
     if (off == 0x08 && size == 2) {
         fc->cur_sel = bswap16((uint16_t)val);
         fc->cur_off = 0;

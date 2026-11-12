@@ -1,28 +1,40 @@
 #!/bin/bash
 # SPDX-License-Identifier: GPL-2.0-or-later
-# Cross-compile libffi + glib + libslirp for arm64-apple-ios into ios/deps/,
-# and copy StikJIT.xcframework + build libhusk_rppairing.a for Built-in StikJIT.
+# Cross-compile libffi + glib + libslirp as static libraries for the app.
+#   scripts/build_ios_deps.sh              -> ios/deps      (arm64 iPhone)
+#   scripts/build_ios_deps.sh simulator    -> ios/deps-sim  (arm64 Simulator)
+# Needs Xcode plus `brew install meson ninja pkgconf`.
 set -euo pipefail
 
 export PATH="/opt/homebrew/bin:$HOME/.cargo/bin:$PATH"
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-WORK_DEPS="$ROOT/work/ios_deps_build"
+VARIANT="${1:-device}"
+case "$VARIANT" in
+    device)    SDK=iphoneos;        SUFFIX="" ;;
+    simulator) SDK=iphonesimulator; SUFFIX="-sim" ;;
+    *) echo "usage: $0 [device|simulator]" >&2; exit 2 ;;
+esac
+WORK_DEPS="$ROOT/work/ios_deps_build$SUFFIX"
 DL="$WORK_DEPS/sources"
 SRC="$WORK_DEPS/src"
 PREFIX="$WORK_DEPS/sysroot"
 STAMPS="$WORK_DEPS/stamps"
-OUT_DEPS="$ROOT/ios/deps"
-HUSK_REF="${HUSK_REF:-/Users/ammaar/.gemini/antigravity/brain/f6b287cc-b4bb-4bf9-b1ba-7daee58236c9/scratch/refs/Husk}"
+OUT_DEPS="$ROOT/ios/deps$SUFFIX"
+# Optional checkout of Leviidev/Husk: its libslirp patch and StikJIT.xcframework are used when present.
+HUSK_REF="${HUSK_REF:-}"
 
 mkdir -p "$DL" "$SRC" "$PREFIX" "$STAMPS" "$OUT_DEPS/lib" "$OUT_DEPS/include"
 
 ARCH=arm64
-SDK=iphoneos
 SDKMINVER=17.0
 NCPU="$(sysctl -n hw.ncpu)"
 SDKROOT="$(xcrun --sdk $SDK --show-sdk-path)"
-CFLAGS_TARGET="-target $ARCH-apple-ios$SDKMINVER"
+if [ "$VARIANT" = simulator ]; then
+    CFLAGS_TARGET="-target $ARCH-apple-ios$SDKMINVER-simulator"
+else
+    CFLAGS_TARGET="-target $ARCH-apple-ios$SDKMINVER"
+fi
 
 export CC="$(xcrun --sdk $SDK --find clang) $CFLAGS_TARGET"
 export CXX="$(xcrun --sdk $SDK --find clang++) $CFLAGS_TARGET"
@@ -93,7 +105,7 @@ ranlib = ['$RANLIB']
 strip = ['$STRIP', '-x']
 pkg-config = ['$PKG_CONFIG']
 pkgconfig = ['$PKG_CONFIG']
-python = ['/opt/homebrew/bin/python3']
+python = ['$(command -v python3)']
 [host_machine]
 system = '$system'
 EOF
@@ -141,7 +153,7 @@ fi
 # 3. libslirp
 if [ ! -f "$STAMPS/libslirp" ]; then
     echo "[build] libslirp-v4.9.1"
-    if [ -f "$HUSK_REF/patches/libslirp-v4.9.1.patch" ] && [ ! -f "$SRC/libslirp-v4.9.1/.patched" ]; then
+    if [ -n "$HUSK_REF" ] && [ -f "$HUSK_REF/patches/libslirp-v4.9.1.patch" ] && [ ! -f "$SRC/libslirp-v4.9.1/.patched" ]; then
         ( cd "$SRC/libslirp-v4.9.1" && patch -p1 -N -r - < "$HUSK_REF/patches/libslirp-v4.9.1.patch" || true )
         touch "$SRC/libslirp-v4.9.1/.patched"
     fi
@@ -164,7 +176,7 @@ for lib in libslirp.a libglib-2.0.a libintl.a libpcre2-8.a libffi.a; do
 done
 
 # Copy StikJIT.xcframework if available
-if [ -d "$HUSK_REF/src/app/Frameworks/StikJIT.xcframework" ]; then
+if [ -n "$HUSK_REF" ] && [ -d "$HUSK_REF/src/app/Frameworks/StikJIT.xcframework" ]; then
     rm -rf "$OUT_DEPS/StikJIT.xcframework"
     ditto "$HUSK_REF/src/app/Frameworks/StikJIT.xcframework" "$OUT_DEPS/StikJIT.xcframework"
 fi

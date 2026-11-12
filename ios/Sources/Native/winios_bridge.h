@@ -26,6 +26,24 @@ typedef void (^WinIOSStateCallback)(void);
 @property (nonatomic, readonly) BOOL usbTabletReady;
 @property (nonatomic, readonly) uint64_t usbEventsDelivered;
 @property (nonatomic, assign) BOOL useSafariForGuestLinks;
+
+/* Machine settings. Set before -prepareAndStartWithLayer:; they are read when the VM is created. */
+@property (nonatomic, assign) uint32_t preferredWidth;   /* boot framebuffer; 0 = firmware default (800x600) */
+@property (nonatomic, assign) uint32_t preferredHeight;
+@property (nonatomic, assign) uint64_t preferredRamMB;   /* 0 = as much as the device allows */
+@property (nonatomic, assign) int preferredCPUs;         /* 0 = 4 */
+@property (nonatomic, assign) BOOL diagnosticsEnabled;   /* write boot_status.txt and latest_screen.png to Documents */
+
+/* Where the machine's files live (Documents/Machines/Win11 unless code.fd sits in Documents). */
+@property (nonatomic, readonly) NSString *machineDirectory;
+@property (nonatomic, readonly) BOOL hasFirmware;        /* code.fd in the machine folder, or the copy shipped in the app */
+@property (nonatomic, readonly) BOOL usesBundledFirmware;
+@property (nonatomic, readonly) BOOL hasDiskImage;       /* windows11.img or windows11.hvsparse */
+@property (nonatomic, readonly) BOOL isSimulator;
+@property (nonatomic, readonly) uint64_t configuredRamMB;
+@property (nonatomic, readonly) int configuredCPUs;
+@property (nonatomic, readonly) double guestIdlePercent; /* share of vCPU time spent idle, last 8 s */
+@property (nonatomic, readonly) double uptimeSeconds;
 @property (nonatomic, copy, nullable) WinIOSStateCallback onStateChanged;
 
 - (nullable NSString *)takeGuestOpenURL;
@@ -52,6 +70,9 @@ typedef void (^WinIOSStateCallback)(void);
 - (void)sendEscape;
 - (void)pressPowerButton;
 - (void)flushDisks;
+- (void)setDisplayFPS:(int)fps;
+- (void)setNearestFilter:(BOOL)nearest;
+- (BOOL)saveScreenshotToPath:(NSString *)path;
 - (void)stopVM;
 
 @end

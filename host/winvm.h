@@ -24,6 +24,8 @@ typedef struct HvWinVmConfig {
     int enable_sound;
     int log;
     int stats_interval;
+    uint32_t fb_width;        /* Preferred boot framebuffer size; 0 = firmware default (800x600) */
+    uint32_t fb_height;
 } HvWinVmConfig;
 
 int hv_winvm_create(const HvWinVmConfig *cfg, char *err, size_t errlen);

@@ -69,13 +69,24 @@ test-core: $(CORE_TESTS)
 $(B):
 	mkdir -p $(B)
 
-# ---- iOS static library target: build/ios/libwinvm.a ----
-IOS_SDK = $(shell xcrun --sdk iphoneos --show-sdk-path)
-IOS_CC = xcrun --sdk iphoneos clang -arch arm64 -miphoneos-version-min=17.0 -isysroot $(IOS_SDK)
-IOS_SLIRP_INC ?= ios/deps/include/slirp
+# ---- iOS static library ----
+#   make ios-lib   -> build/ios/libwinvm.a      (arm64 iPhone, links against ios/deps)
+#   make sim-lib   -> build/ios-sim/libwinvm.a  (arm64 Simulator, links against ios/deps-sim)
+IOS_PLATFORM ?= iphoneos
+ifeq ($(IOS_PLATFORM),iphonesimulator)
+IOS_TARGET = arm64-apple-ios17.0-simulator
+IB = build/ios-sim
+IOS_DEPS ?= ios/deps-sim
+else
+IOS_TARGET = arm64-apple-ios17.0
+IB = build/ios
+IOS_DEPS ?= ios/deps
+endif
+IOS_SDK = $(shell xcrun --sdk $(IOS_PLATFORM) --show-sdk-path)
+IOS_CC = xcrun --sdk $(IOS_PLATFORM) clang -target $(IOS_TARGET) -isysroot $(IOS_SDK)
+IOS_SLIRP_INC ?= $(IOS_DEPS)/include/slirp
 IOS_CFLAGS = -std=c11 -Wall -Wextra -O2 -g -Icore -Ihost -Idevices -I$(IOS_SLIRP_INC)
 IOS_OBJCFLAGS = -fobjc-arc -Wall -Wextra -O2 -g -Icore -Ihost -Idevices
-IB = build/ios
 
 IOS_C_SRC = $(wildcard core/*.c) \
             host/jit_region.c host/disk.c host/winvm.c host/net_slirp.c host/share.c \
@@ -97,11 +108,14 @@ $(IB)/host/enter.o: host/enter.S
 	$(IOS_CC) -c $< -o $@
 $(IB)/libwinvm.a: $(IOS_OBJ)
 	rm -f $@
-	xcrun --sdk iphoneos libtool -static -o $@ $(IOS_OBJ)
+	xcrun --sdk $(IOS_PLATFORM) libtool -static -o $@ $(IOS_OBJ)
 
 ios-lib: $(IB)/libwinvm.a
+
+sim-lib:
+	$(MAKE) ios-lib IOS_PLATFORM=iphonesimulator
 
 clean:
 	rm -rf $(B)
 
-.PHONY: all test-core ios-lib clean
+.PHONY: all test-core ios-lib sim-lib clean

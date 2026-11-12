@@ -1,0 +1,72 @@
+name: Build IPA
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths: ["core/**", "devices/**", "host/**", "ios/**", "scripts/**", "Makefile"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ipa:
+    runs-on: macos-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tools
+        run: brew install xcodegen meson ninja pkgconf
+
+      - name: Cache cross-compiled dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ios/deps
+            work/ios_deps_build/sources
+          key: ios-deps-${{ runner.os }}-${{ hashFiles('scripts/build_ios_deps.sh') }}
+
+      - name: Version
+        id: version
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=0.0.$GITHUB_RUN_NUMBER" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          BUILD_NUMBER: ${{ github.run_number }}
+        run: scripts/build_ipa.sh
+
+      - name: Source for AltStore and SideStore
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          BUILD_NUMBER: ${{ github.run_number }}
+        run: python3 scripts/make_source.py dist/Caterpillar.ipa > dist/repo.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Caterpillar-${{ steps.version.outputs.version }}
+          path: |
+            dist/Caterpillar.ipa
+            dist/repo.json
+
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || \
+            gh release create "$GITHUB_REF_NAME" --title "Caterpillar ${GITHUB_REF_NAME#v}" --generate-notes
+          gh release upload "$GITHUB_REF_NAME" dist/Caterpillar.ipa dist/repo.json --clobber

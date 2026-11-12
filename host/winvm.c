@@ -190,6 +190,14 @@ int hv_winvm_create(const HvWinVmConfig *c, char *err, size_t errlen) {
     }
     hv_winvirt_reset_cpu(&board);
 
+    {
+        uint32_t fbw = c->fb_width, fbh = c->fb_height;
+        const char *res = getenv("HV_RES"); /* "WxH" override for tests */
+        if (res) sscanf(res, "%ux%u", &fbw, &fbh);
+        if (fbw >= 640 && fbh >= 480 && fbw <= 4096 && fbh <= 4096)
+            hv_fw_cfg_set_gop_mode(board.fw_cfg, fbw & ~7u, fbh & ~1u);
+    }
+
     share_on = 0;
     if (c->share_dir && *c->share_dir && c->share_sock && *c->share_sock) {
         if (hv_share_start(c->share_dir, c->share_sock, NULL) == 0) {

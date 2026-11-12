@@ -37,5 +37,8 @@ int hv_fb_display_get_frame(HvFbDisplay *fb, const uint8_t **pixels, uint32_t *w
 void hv_fb_metal_set_layer(HvFbDisplay *fb, void *ca_metal_layer);
 uint64_t hv_fb_metal_frames(HvFbDisplay *fb);
 int hv_fb_save_png(HvFbDisplay *fb, const char *path);
+/* Presentation rate (60 or 30) and magnification filter (0 = linear, 1 = nearest). Any thread. */
+void hv_fb_metal_set_fps(int fps);
+void hv_fb_metal_set_nearest(int on);
 
 #endif

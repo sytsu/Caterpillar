@@ -2,6 +2,7 @@
 build/
 work/
 ios/deps/
+ios/deps-sim/
 ios/*.xcodeproj
 ios/DerivedData/
 
@@ -41,3 +42,6 @@ ios/DerivedData/
 __pycache__/
 *.pyc
 .DS_Store
+ios/Generated/
+ios/Firmware/
+dist/

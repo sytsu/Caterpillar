@@ -27,11 +27,30 @@ static NSString *const kFbShaderSource =
      "    o.uv  = uvs[vid];\n"
      "    return o;\n"
      "}\n"
-     "fragment float4 fb_fs(VOut in [[stage_in]], texture2d<float> tex [[texture(0)]]) {\n"
-     "    constexpr sampler s(mag_filter::linear, min_filter::linear, address::clamp_to_edge);\n"
-     "    float4 c = tex.sample(s, in.uv);\n"
+     "fragment float4 fb_fs(VOut in [[stage_in]], texture2d<float> tex [[texture(0)]],\n"
+     "                      constant uint &nearest [[buffer(0)]]) {\n"
+     "    constexpr sampler sl(mag_filter::linear, min_filter::linear, address::clamp_to_edge);\n"
+     "    constexpr sampler sn(mag_filter::nearest, min_filter::linear, address::clamp_to_edge);\n"
+     "    float4 c = nearest ? tex.sample(sn, in.uv) : tex.sample(sl, in.uv);\n"
      "    return float4(c.rgb, 1.0);\n"
      "}\n";
+
+/* Presentation options, shared by every presenter (there is one display). */
+static _Atomic int g_fb_fps = 60;      /* 60 or 30 */
+static _Atomic int g_fb_nearest = 0;   /* 1 = nearest-neighbour magnification */
+static _Atomic int g_fb_redraw = 0;    /* force the next tick to draw */
+
+void hv_fb_metal_set_fps(int fps) {
+    atomic_store(&g_fb_fps, fps <= 30 ? 30 : 60);
+}
+
+void hv_fb_metal_set_nearest(int on) {
+    atomic_store(&g_fb_nearest, on ? 1 : 0);
+    atomic_store(&g_fb_redraw, 1);
+}
+
+/* Rows compared and uploaded together. */
+#define FB_BAND_ROWS 16u
 
 @interface HvFbMetalPresenter : NSObject {
 @public
@@ -45,7 +64,8 @@ static NSString *const kFbShaderSource =
     uint32_t texW, texH;
     dispatch_source_t timer;
     _Atomic(uint64_t) framesPresented;
-    uint64_t lastHash;
+    uint8_t *shadow;      /* what the texture holds: texW x texH, tightly packed BGRX */
+    uint64_t tickCount;
     CGSize lastDrawableSize;
 }
 - (instancetype)initWithDisplay:(HvFbDisplay *)display;
@@ -76,10 +96,13 @@ static NSString *const kFbShaderSource =
     return self;
 }
 
+- (void)dealloc {
+    free(shadow);
+}
+
 - (void)setTargetLayer:(CAMetalLayer *)newLayer {
     os_unfair_lock_lock(&lock);
     layer = newLayer;
-    lastHash = 0;
     lastDrawableSize = CGSizeZero;
     if (layer && device) {
         dispatch_block_t cfg = ^{
@@ -91,7 +114,7 @@ static NSString *const kFbShaderSource =
         else dispatch_async(dispatch_get_main_queue(), cfg);
 
         if (!timer) {
-            dispatch_queue_t q = dispatch_queue_create("me.ammaar.windowsios.fbmetal", DISPATCH_QUEUE_SERIAL);
+            dispatch_queue_t q = dispatch_queue_create("caterpillar.fbmetal", dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INTERACTIVE, 0));
             timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, q);
             dispatch_source_set_timer(timer, DISPATCH_TIME_NOW, NSEC_PER_SEC / 60, 2 * NSEC_PER_MSEC);
             __weak HvFbMetalPresenter *weakSelf = self;
@@ -107,22 +130,45 @@ static NSString *const kFbShaderSource =
     os_unfair_lock_unlock(&lock);
 }
 
-static uint64_t quick_frame_hash(const uint8_t *px, uint32_t w, uint32_t h, uint32_t stride) {
-    uint64_t hash = ((uint64_t)w << 32) ^ h ^ stride;
-    uint32_t step_y = h > 128 ? h / 128 : 1;
-    for (uint32_t y = 0; y < h; y += step_y) {
-        const uint64_t *row = (const uint64_t *)(px + (size_t)y * stride);
-        uint32_t qwords = (w * 4) / 8;
-        uint32_t step_x = qwords > 64 ? qwords / 64 : 1;
-        for (uint32_t x = 0; x < qwords; x += step_x) {
-            hash = (hash ^ row[x]) * 0x9e3779b97f4a7c15ull;
+/* Copy the rows that changed since the last tick into `shadow` and report their span.
+   The guest draws while we read, so a row can change again right after it is compared; the
+   next tick picks that up. Comparing everything (rather than sampling) is what keeps small
+   changes, such as the mouse pointer or one typed letter, from being missed. */
+static int sync_shadow(uint8_t *shadow, const uint8_t *px, uint32_t w, uint32_t h, uint32_t stride,
+                       uint32_t *y0_out, uint32_t *y1_out) {
+    size_t row_bytes = (size_t)w * 4;
+    uint32_t y0 = h, y1 = 0;
+    for (uint32_t y = 0; y < h; y += FB_BAND_ROWS) {
+        uint32_t n = h - y < FB_BAND_ROWS ? h - y : FB_BAND_ROWS;
+        const uint8_t *src = px + (size_t)y * stride;
+        uint8_t *dst = shadow + (size_t)y * row_bytes;
+        int changed = 0;
+        if (stride == row_bytes) {
+            changed = memcmp(src, dst, n * row_bytes) != 0;
+            if (changed) memcpy(dst, src, n * row_bytes);
+        } else {
+            for (uint32_t r = 0; r < n; r++) {
+                if (memcmp(src + (size_t)r * stride, dst + r * row_bytes, row_bytes)) {
+                    memcpy(dst + r * row_bytes, src + (size_t)r * stride, row_bytes);
+                    changed = 1;
+                }
+            }
+        }
+        if (changed) {
+            if (y < y0) y0 = y;
+            y1 = y + n;
         }
     }
-    return hash ? hash : 1;
+    *y0_out = y0;
+    *y1_out = y1;
+    return y1 > y0;
 }
 
 - (void)tick {
     @autoreleasepool {
+        tickCount++;
+        if (atomic_load(&g_fb_fps) <= 30 && (tickCount & 1)) return;
+
         const uint8_t *px = NULL;
         uint32_t w = 0, h = 0, stride = 0;
         if (hv_fb_display_get_frame(fb, &px, &w, &h, &stride) != 0) return;
@@ -140,12 +186,8 @@ static uint64_t quick_frame_hash(const uint8_t *px, uint32_t w, uint32_t h, uint
             return;
         }
 
-        uint64_t hval = quick_frame_hash(px, w, h, stride);
-        BOOL sizeChanged = !CGSizeEqualToSize(dsize, lastDrawableSize);
-        if (hval == lastHash && !sizeChanged && texW == w && texH == h) {
-            os_unfair_lock_unlock(&lock);
-            return;
-        }
+        BOOL redraw = !CGSizeEqualToSize(dsize, lastDrawableSize);
+        if (atomic_exchange(&g_fb_redraw, 0)) redraw = YES;
 
         if (!texture || texW != w || texH != h) {
             MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
@@ -154,17 +196,38 @@ static uint64_t quick_frame_hash(const uint8_t *px, uint32_t w, uint32_t h, uint
                                                                                       mipmapped:NO];
             td.usage = MTLTextureUsageShaderRead;
             texture = [device newTextureWithDescriptor:td];
+            free(shadow);
+            /* Start from a value the guest will not have (alpha 0x01), so the first compare uploads everything. */
+            shadow = malloc((size_t)w * h * 4);
+            if (!texture || !shadow) {
+                texture = nil;
+                free(shadow);
+                shadow = NULL;
+                texW = texH = 0;
+                os_unfair_lock_unlock(&lock);
+                return;
+            }
+            memset(shadow, 0x01, (size_t)w * h * 4);
             texW = w;
             texH = h;
         }
 
-        [texture replaceRegion:MTLRegionMake2D(0, 0, w, h)
-                   mipmapLevel:0
-                     withBytes:px
-                   bytesPerRow:stride];
+        uint32_t y0 = 0, y1 = 0;
+        if (sync_shadow(shadow, px, w, h, stride, &y0, &y1)) {
+            [texture replaceRegion:MTLRegionMake2D(0, y0, w, y1 - y0)
+                       mipmapLevel:0
+                         withBytes:shadow + (size_t)y0 * w * 4
+                       bytesPerRow:(NSUInteger)w * 4];
+            redraw = YES;
+        }
+        if (!redraw) {
+            os_unfair_lock_unlock(&lock);
+            return;
+        }
 
         id<CAMetalDrawable> drawable = [curLayer nextDrawable];
         if (!drawable) {
+            atomic_store(&g_fb_redraw, 1); /* the texture is ahead of the screen: draw on the next tick */
             os_unfair_lock_unlock(&lock);
             return;
         }
@@ -188,13 +251,14 @@ static uint64_t quick_frame_hash(const uint8_t *px, uint32_t w, uint32_t h, uint
         id<MTLRenderCommandEncoder> enc = [cb renderCommandEncoderWithDescriptor:rp];
         [enc setRenderPipelineState:pipeline];
         [enc setVertexBytes:scale length:sizeof(scale) atIndex:0];
+        uint32_t nearest = (uint32_t)atomic_load(&g_fb_nearest);
+        [enc setFragmentBytes:&nearest length:sizeof nearest atIndex:0];
         [enc setFragmentTexture:texture atIndex:0];
         [enc drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
         [enc endEncoding];
         [cb presentDrawable:drawable];
         [cb commit];
 
-        lastHash = hval;
         lastDrawableSize = dsize;
         atomic_fetch_add_explicit(&framesPresented, 1, memory_order_relaxed);
         os_unfair_lock_unlock(&lock);

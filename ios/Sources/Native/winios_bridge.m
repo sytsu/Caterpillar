@@ -5,6 +5,8 @@
 #include "share.h"
 #include "winios_jit.h"
 #include "winvm.h"
+#include "fb_display.h"
+#include <TargetConditionals.h>
 
 #import <AVFoundation/AVFoundation.h>
 #import <UIKit/UIKit.h>
@@ -35,6 +37,7 @@ static WinIOSBridge *s_shared_bridge = nil;
     CGFloat _screenScale;
     NSInteger _hingeStatus;
     double _hingeAngleDegrees;
+    BOOL _diagnosticsEnabled;
 }
 - (void)handleVMExitWithReason:(NSString *)reason;
 - (void)updateUnpackProgress:(double)frac;
@@ -88,7 +91,7 @@ static void unpack_progress_cb(uint64_t done, uint64_t total, void *opaque) {
         BOOL safariDefault = ([ud objectForKey:@"winios.safariOAuthV2"] == nil) ? YES : [ud boolForKey:@"winios.safariOAuthV2"];
         hv_share_set_url_handler_enabled(safariDefault ? 1 : 0);
         dispatch_queue_attr_t attr = dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_UTILITY, 0);
-        _diagQueue = dispatch_queue_create("me.ammaar.windowsios.diag", attr);
+        _diagQueue = dispatch_queue_create("caterpillar.diag", attr);
         NSNotificationCenter *nc = [NSNotificationCenter defaultCenter];
         [nc addObserver:self selector:@selector(onAppBackgroundOrTerminate:) name:UIApplicationDidEnterBackgroundNotification object:nil];
         [nc addObserver:self selector:@selector(onAppBackgroundOrTerminate:) name:UIApplicationWillTerminateNotification object:nil];
@@ -175,6 +178,7 @@ static void unpack_progress_cb(uint64_t done, uint64_t total, void *opaque) {
 }
 
 - (BOOL)tryAcquireJIT:(BOOL)detachAfter {
+    winios_jit_set_guest_ram_limit_mb(_preferredRamMB);
     BOOL ok = winios_jit_acquire(WINIOS_JIT_DEFAULT_BYTES, detachAfter);
     dispatch_async(_diagQueue, ^{
         [self writeDiagnosticsSnapshot];
@@ -256,6 +260,61 @@ static void unpack_progress_cb(uint64_t done, uint64_t total, void *opaque) {
     return NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject ?: NSTemporaryDirectory();
 }
 
+- (BOOL)isSimulator {
+#if TARGET_OS_SIMULATOR
+    return YES;
+#else
+    return NO;
+#endif
+}
+
+- (uint64_t)configuredRamMB { return _configuredRamMB; }
+- (int)configuredCPUs { return _configuredCPUs; }
+- (double)guestIdlePercent { return _lastWfiIdlePct; }
+- (double)uptimeSeconds { return _vmRunning ? CFAbsoluteTimeGetCurrent() - _bootStartTime : 0.0; }
+
+- (BOOL)diagnosticsEnabled { return _diagnosticsEnabled; }
+- (void)setDiagnosticsEnabled:(BOOL)on { _diagnosticsEnabled = on; }
+
+- (void)setDisplayFPS:(int)fps { hv_fb_metal_set_fps(fps); }
+- (void)setNearestFilter:(BOOL)nearest { hv_fb_metal_set_nearest(nearest ? 1 : 0); }
+
+- (BOOL)saveScreenshotToPath:(NSString *)path {
+    return _vmRunning && hv_winvm_save_png(path.fileSystemRepresentation) == 0;
+}
+
+/* The UEFI firmware: the user's own code.fd wins, otherwise the EDK2 build shipped in the app. */
+- (nullable NSString *)firmwarePathInDirectory:(NSString *)dir {
+    NSString *own = [dir stringByAppendingPathComponent:@"code.fd"];
+    if ([[NSFileManager defaultManager] fileExistsAtPath:own]) return own;
+    return [[NSBundle mainBundle] pathForResource:@"code" ofType:@"fd"];
+}
+
+- (BOOL)hasFirmware {
+    return [self firmwarePathInDirectory:[self machineDirectory]] != nil;
+}
+
+- (BOOL)usesBundledFirmware {
+    NSString *p = [self firmwarePathInDirectory:[self machineDirectory]];
+    return p != nil && [p hasPrefix:[NSBundle mainBundle].bundlePath];
+}
+
+- (BOOL)hasDiskImage {
+    NSString *dir = [self machineDirectory];
+    return [self hasRawDiskImageAt:dir] || [self needsSparseUnpack];
+}
+
+/* UEFI variables start out as 64 MiB of zeros, the same as QEMU's blank vars template. */
+- (BOOL)ensureVarsAt:(NSString *)path {
+    NSFileManager *fm = [NSFileManager defaultManager];
+    if ([fm fileExistsAtPath:path]) return YES;
+    int fd = open(path.fileSystemRepresentation, O_CREAT | O_RDWR, 0644);
+    if (fd < 0) return NO;
+    int rc = ftruncate(fd, 64ll << 20);
+    close(fd);
+    return rc == 0;
+}
+
 - (NSString *)machineDirectory {
     NSString *docs = [self documentsPath];
     NSString *win11Dir = [docs stringByAppendingPathComponent:@"Machines/Win11"];
@@ -271,7 +330,8 @@ static void unpack_progress_cb(uint64_t done, uint64_t total, void *opaque) {
 }
 
 - (BOOL)hasRawDiskImageAt:(NSString *)dir {
-    NSString *raw = [dir stringByAppendingPathComponent:@"windows11.img"];
+    /* Follow a symbolic link, so the image may live elsewhere (handy in the Simulator). */
+    NSString *raw = [[dir stringByAppendingPathComponent:@"windows11.img"] stringByResolvingSymlinksInPath];
     NSDictionary *attrs = [[NSFileManager defaultManager] attributesOfItemAtPath:raw error:nil];
     return attrs && [attrs fileSize] >= (64ull << 20);
 }
@@ -284,15 +344,13 @@ static void unpack_progress_cb(uint64_t done, uint64_t total, void *opaque) {
 
 - (BOOL)hasProvisionedMachine {
     NSString *dir = [self machineDirectory];
-    NSFileManager *fm = [NSFileManager defaultManager];
-    if (![fm fileExistsAtPath:[dir stringByAppendingPathComponent:@"code.fd"]]) return NO;
-    if (![fm fileExistsAtPath:[dir stringByAppendingPathComponent:@"vars.fd"]]) return NO;
+    if (![self firmwarePathInDirectory:dir]) return NO;
     return [self hasRawDiskImageAt:dir] || [self needsSparseUnpack];
 }
 
 - (void)updateUnpackProgress:(double)frac {
     _unpackProgress = frac;
-    _vmStatus = [NSString stringWithFormat:@"Unpacking Windows 11 NVMe image (%.0f%%)...", frac * 100.0];
+    _vmStatus = [NSString stringWithFormat:@"Unpacking disk image (%.0f%%)", frac * 100.0];
     dispatch_async(_diagQueue, ^{
         [self writeDiagnosticsSnapshot];
     });
@@ -313,7 +371,7 @@ static void unpack_progress_cb(uint64_t done, uint64_t total, void *opaque) {
     if (!self.isJITLive) {
         [self tryAcquireJIT:YES];
         if (!self.isJITLive) {
-            _vmStatus = @"Waiting for TXM JIT (attach StikDebug or launch_on_duo.sh)";
+            _vmStatus = @"Waiting for JIT";
             dispatch_async(_diagQueue, ^{ [self writeDiagnosticsSnapshot]; });
             [self notifyChanged];
             return;
@@ -321,7 +379,7 @@ static void unpack_progress_cb(uint64_t done, uint64_t total, void *opaque) {
     }
 
     if (![self hasProvisionedMachine]) {
-        _vmStatus = @"Place code.fd, vars.fd, and windows11.hvsparse in Documents/Machines/Win11";
+        _vmStatus = @"No disk image";
         dispatch_async(_diagQueue, ^{ [self writeDiagnosticsSnapshot]; });
         [self notifyChanged];
         return;
@@ -331,7 +389,7 @@ static void unpack_progress_cb(uint64_t done, uint64_t total, void *opaque) {
     if ([self needsSparseUnpack]) {
         _unpacking = YES;
         _unpackProgress = 0.0;
-        _vmStatus = @"Unpacking Windows 11 NVMe image (0%)...";
+        _vmStatus = @"Unpacking disk image (0%)";
         dispatch_async(_diagQueue, ^{ [self writeDiagnosticsSnapshot]; });
         [self notifyChanged];
 
@@ -354,7 +412,7 @@ static void unpack_progress_cb(uint64_t done, uint64_t total, void *opaque) {
                     [self startConfiguredVMInDirectory:dir];
                 } else {
                     unlink(tmpDst.fileSystemRepresentation);
-                    self->_vmStatus = @"Error: failed to unpack windows11.hvsparse";
+                    self->_vmStatus = @"Could not unpack windows11.hvsparse (is there enough free space?)";
                     dispatch_async(self->_diagQueue, ^{ [self writeDiagnosticsSnapshot]; });
                     [self notifyChanged];
                 }
@@ -372,7 +430,7 @@ static void unpack_progress_cb(uint64_t done, uint64_t total, void *opaque) {
 
     WinIosDualMapping jit = winios_jit_mapping();
     if (!jit.rx_addr || !jit.rw_addr) {
-        _vmStatus = @"Error: JIT region missing";
+        _vmStatus = @"JIT region missing";
         [self notifyChanged];
         return;
     }
@@ -385,6 +443,8 @@ static void unpack_progress_cb(uint64_t done, uint64_t total, void *opaque) {
     uint64_t ramMB = 3072;
     if (preallocRam && preallocBytes >= (1024ull << 20)) {
         ramMB = preallocBytes >> 20;
+    } else if (_preferredRamMB >= 1024) {
+        ramMB = _preferredRamMB;
     } else {
         uint64_t availMB = [self availableMemoryMB];
         if (availMB >= 5000) ramMB = 4096;
@@ -400,12 +460,17 @@ static void unpack_progress_cb(uint64_t done, uint64_t total, void *opaque) {
     NSString *shareSock = [rawTmp stringByAppendingPathComponent:@"s"];
     unlink(shareSock.fileSystemRepresentation);
 
-    NSString *codePath = [dir stringByAppendingPathComponent:@"code.fd"];
+    NSString *codePath = [self firmwarePathInDirectory:dir];
     NSString *varsPath = [dir stringByAppendingPathComponent:@"vars.fd"];
     NSString *diskPath = [dir stringByAppendingPathComponent:@"windows11.img"];
+    if (!codePath || ![self ensureVarsAt:varsPath]) {
+        _vmStatus = @"UEFI firmware is missing";
+        [self notifyChanged];
+        return;
+    }
 
     _configuredRamMB = ramMB;
-    _configuredCPUs = 4;
+    _configuredCPUs = _preferredCPUs >= 1 ? MIN(_preferredCPUs, 8) : 4;
 
     HvWinVmConfig cfg = {
         .code_fd = codePath.fileSystemRepresentation,
@@ -424,11 +489,13 @@ static void unpack_progress_cb(uint64_t done, uint64_t total, void *opaque) {
         .enable_sound = 1,
         .log = 0,
         .stats_interval = 0,
+        .fb_width = _preferredWidth,
+        .fb_height = _preferredHeight,
     };
 
     char err[256] = {0};
     if (hv_winvm_create(&cfg, err, sizeof err) != 0) {
-        _vmStatus = [NSString stringWithFormat:@"VM create failed: %s", err];
+        _vmStatus = [NSString stringWithFormat:@"Could not start: %s", err];
         dispatch_async(_diagQueue, ^{ [self writeDiagnosticsSnapshot]; });
         [self notifyChanged];
         return;
@@ -445,7 +512,7 @@ static void unpack_progress_cb(uint64_t done, uint64_t total, void *opaque) {
     _lastMachTicks = mach_absolute_time();
     _lastWfiTicks = 0;
     _lastWfiIdlePct = 0.0;
-    _vmStatus = [NSString stringWithFormat:@"Running Windows 11 ARM64 (%d vCPUs, %llu MB RAM)", _configuredCPUs, _configuredRamMB];
+    _vmStatus = [NSString stringWithFormat:@"Running (%d cores, %llu MB)", _configuredCPUs, _configuredRamMB];
     [[UIApplication sharedApplication] setIdleTimerDisabled:YES];
 
     hv_winvm_start(1, vm_exit_trampoline);
@@ -487,7 +554,7 @@ static void unpack_progress_cb(uint64_t done, uint64_t total, void *opaque) {
             hv_winvm_flush_disks();
         }
         double uptime = CFAbsoluteTimeGetCurrent() - _bootStartTime;
-        if (uptime <= 240.0 || getenv("WINIOS_ALWAYS_SCREENSHOT") != NULL) {
+        if (_diagnosticsEnabled && (uptime <= 240.0 || getenv("WINIOS_ALWAYS_SCREENSHOT") != NULL)) {
             NSString *docs = [self documentsPath];
             NSString *tmpPng = [docs stringByAppendingPathComponent:@"latest_screen.png.tmp"];
             NSString *dstPng = [docs stringByAppendingPathComponent:@"latest_screen.png"];
@@ -500,6 +567,21 @@ static void unpack_progress_cb(uint64_t done, uint64_t total, void *opaque) {
 }
 
 - (void)writeDiagnosticsSnapshot {
+    if (!_diagnosticsEnabled) {
+        /* Still keep the idle figure fresh for the in-app status readout. */
+        if (_vmRunning) {
+            uint64_t wfi = 0;
+            hv_winvm_engine_stats(NULL, NULL, NULL, &wfi);
+            uint64_t now = mach_absolute_time();
+            if (_lastMachTicks > 0 && now > _lastMachTicks && wfi >= _lastWfiTicks && _configuredCPUs > 0) {
+                double pct = 100.0 * (double)(wfi - _lastWfiTicks) / ((double)(now - _lastMachTicks) * (double)_configuredCPUs);
+                _lastWfiIdlePct = pct < 0.0 ? 0.0 : pct > 100.0 ? 100.0 : pct;
+            }
+            _lastMachTicks = now;
+            _lastWfiTicks = wfi;
+        }
+        return;
+    }
     NSString *docs = [self documentsPath];
     NSString *statusFile = [docs stringByAppendingPathComponent:@"boot_status.txt"];
     BOOL running = _vmRunning;
@@ -587,6 +669,7 @@ static void unpack_progress_cb(uint64_t done, uint64_t total, void *opaque) {
     [self stopDiagTimer];
     [[UIApplication sharedApplication] setIdleTimerDisabled:NO];
     _vmStatus = [NSString stringWithFormat:@"Stopped (%@)", reason];
+    hv_winvm_set_display_layer(NULL);
     dispatch_async(_diagQueue, ^{ [self writeDiagnosticsSnapshot]; });
     [self notifyChanged];
 }

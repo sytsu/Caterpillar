@@ -87,6 +87,12 @@ static uint64_t g_guest_ram_bytes;
 static atomic_bool g_jit_live;
 static char g_status[256] = "Not initialized";
 
+static uint64_t g_guest_ram_limit_mb;
+
+void winios_jit_set_guest_ram_limit_mb(uint64_t mb) {
+    g_guest_ram_limit_mb = mb;
+}
+
 static void prealloc_ledger_exempt_ram(void) {
     if (g_guest_ram) return;
     uint64_t phys_mem = 0;
@@ -98,6 +104,7 @@ static void prealloc_ledger_exempt_ram(void) {
     for (size_t i = 0; i < sizeof(candidates_mb) / sizeof(candidates_mb[0]); i++) {
         uint64_t mb = candidates_mb[i];
         if (phys_mb > 0 && mb + 2560 > phys_mb) continue;
+        if (g_guest_ram_limit_mb >= 2048 && mb > g_guest_ram_limit_mb) continue;
         uint8_t *p = hv_alloc_no_footprint(mb << 20);
         if (p) {
             g_guest_ram = p;
@@ -202,6 +209,32 @@ bool winios_jit_acquire(size_t bytes, bool detach_after) {
     if (atomic_load(&g_jit_live)) return true;
     if (bytes == 0) bytes = WINIOS_JIT_DEFAULT_BYTES;
     bytes = (bytes + 0x3fffu) & ~(size_t)0x3fffu;
+
+#if TARGET_OS_SIMULATOR
+    /* The Simulator is a Mac process: nothing checks code signatures page by page, so an RX
+       mapping with an RW alias needs no debugger. Lets the whole VM run on a Mac for testing. */
+    {
+        uint8_t *rx = mmap(NULL, bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+        if (rx != MAP_FAILED) {
+            vm_address_t rw = 0;
+            vm_prot_t cur, max;
+            if (vm_remap(mach_task_self(), &rw, bytes, 0, VM_FLAGS_ANYWHERE, mach_task_self(),
+                         (vm_address_t)rx, FALSE, &cur, &max, VM_INHERIT_NONE) == KERN_SUCCESS &&
+                mprotect(rx, bytes, PROT_READ | PROT_EXEC) == 0) {
+                WinIosDualMapping m = {(uint8_t *)rw, rx, bytes};
+                if (jit_selftest(&m)) {
+                    g_mapping = m;
+                    atomic_store(&g_jit_live, true);
+                    set_status("Live (%zu MiB, Simulator)", bytes >> 20);
+                    return true;
+                }
+            }
+            munmap(rx, bytes);
+        }
+        set_status("Failed: Simulator JIT mapping");
+        return false;
+    }
+#endif
 
     if (!winios_jit_is_debugger_attached()) {
         set_status("Waiting for debugger (StikDebug or LLDB)");

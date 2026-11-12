@@ -138,10 +138,10 @@ PANTHER_UNATTEND_XML = r"""<?xml version="1.0" encoding="utf-8"?>
               <Value></Value>
               <PlainText>true</PlainText>
             </Password>
-            <Description>Ammaar</Description>
-            <DisplayName>Ammaar</DisplayName>
+            <Description>User</Description>
+            <DisplayName>User</DisplayName>
             <Group>Administrators</Group>
-            <Name>Ammaar</Name>
+            <Name>User</Name>
           </LocalAccount>
         </LocalAccounts>
       </UserAccounts>
@@ -151,7 +151,7 @@ PANTHER_UNATTEND_XML = r"""<?xml version="1.0" encoding="utf-8"?>
           <PlainText>true</PlainText>
         </Password>
         <Enabled>true</Enabled>
-        <Username>Ammaar</Username>
+        <Username>User</Username>
       </AutoLogon>
       <FirstLogonCommands>
         <SynchronousCommand wcm:action="add">
@@ -312,7 +312,7 @@ def main():
     run_winvm_phase("phase1_dism", ["--disk1", str(INST_IMG)], WORK / "prov_phase1.png", max_minutes=40)
     shutil.copyfile(VARS_FD, WORK / "vars_post_dism.fd")
 
-    # Phase 2: Boot installed Windows 11 Pro ARM64 -> specialize -> reboot -> oobeSystem -> AutoLogon Ammaar -> clean shutdown
+    # Phase 2: Boot installed Windows 11 Pro ARM64 -> specialize -> reboot -> oobeSystem -> AutoLogon User -> clean shutdown
     run_winvm_phase("phase2_oobe", [], WORK / "prov_phase2.png", max_minutes=60)
     shutil.copyfile(VARS_FD, WORK / "vars_clean.fd")
     print("SUCCESS: Windows 11 Pro ARM64 provisioned and cleanly shut down!", flush=True)

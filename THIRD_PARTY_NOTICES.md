@@ -1,5 +1,10 @@
 # Third-Party Notices & Upstream Attributions
 
+> **Caterpillar** is a fork of [WindowsiOS](https://github.com/ammaarreshi/WindowsiOS) by Ammaar Reshi
+> (`GPL-2.0-or-later`). The notices below are WindowsiOS's own and apply to Caterpillar unchanged,
+> with one difference: the Caterpillar app bundle ships the EDK2 `ArmVirtQemu` firmware (see
+> section 6a). Where this file says `WindowsiOS`, read it as covering Caterpillar too.
+
 `WindowsiOS` is licensed as a whole under the **GNU General Public License v2.0 or later** (`GPL-2.0-or-later`; see [`LICENSE`](LICENSE)), preserving all upstream copyright notices and copyleft obligations from [`Leviidev/Henge`](https://github.com/Leviidev/Henge) and [`Leviidev/Husk`](https://github.com/Leviidev/Husk).
 
 This project stands on the shoulders of extraordinary open-source systems engineering across the iOS binary-translation, virtualization, and firmware ecosystems. Every upstream project, library, firmware package, and driver that helped make `WindowsiOS` possible is credited below along with its governing license terms.
@@ -181,6 +186,17 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```
 
 ---
+
+## 6a. EDK2 firmware shipped in the Caterpillar app
+
+The Caterpillar `.ipa` contains `code.fd`: the unmodified `edk2-aarch64-code.fd` build of EDK2
+`ArmVirtQemu` (`edk2-stable202408`) that the QEMU project distributes in `pc-bios/`. It is downloaded
+at build time by [`scripts/fetch_firmware.sh`](scripts/fetch_firmware.sh), checked against a pinned
+SHA-256, and is not committed to this repository. The licence texts for the firmware and the
+components built into it (EDK2 `BSD-2-Clause-Patent`, OpenSSL, and others) are shipped next to it as
+`edk2-licenses.txt`, also taken from QEMU's `pc-bios/`, and can be read in the app under
+Settings › Licences. Caterpillar does not change the firmware file; the display size is adjusted in
+guest memory while the firmware runs.
 
 ## 7. Red Hat `virtio-win` — `NetKVM` ARM64 Driver (`BSD-3-Clause` / `GPL-2.0`)
 

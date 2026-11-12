@@ -28,6 +28,8 @@ bool winios_jit_acquire(size_t bytes, bool detach_after);
 bool winios_jit_is_live(void);
 WinIosDualMapping winios_jit_mapping(void);
 void *winios_jit_guest_ram(uint64_t *out_bytes);
+/* Cap the guest RAM reserved when JIT comes up (0 = no cap). Call before winios_jit_acquire. */
+void winios_jit_set_guest_ram_limit_mb(uint64_t mb);
 const char *winios_jit_status_text(void);
 size_t winios_available_memory_bytes(void);
 

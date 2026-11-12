@@ -349,9 +349,9 @@ reg import X:\Windows\System32\opt_soft.reg >> "%LOGFILE%" 2>&1
 reg unload HKLM\OFFSOFT >> "%LOGFILE%" 2>&1
 reg unload HKLM\OFFSYS >> "%LOGFILE%" 2>&1
 
-echo [4/5] Applying zero-blur instant-UI settings to Ammaar and Default user hives... >> "%LOGFILE%"
-if exist "%WINDRV%\Users\Ammaar\NTUSER.DAT" (
-    reg load HKLM\OFFUSR "%WINDRV%\Users\Ammaar\NTUSER.DAT" >> "%LOGFILE%" 2>&1
+echo [4/5] Applying zero-blur instant-UI settings to User and Default user hives... >> "%LOGFILE%"
+if exist "%WINDRV%\Users\User\NTUSER.DAT" (
+    reg load HKLM\OFFUSR "%WINDRV%\Users\User\NTUSER.DAT" >> "%LOGFILE%" 2>&1
     reg import X:\Windows\System32\opt_usr.reg >> "%LOGFILE%" 2>&1
     reg unload HKLM\OFFUSR >> "%LOGFILE%" 2>&1
 )

@@ -493,6 +493,7 @@ static void usage(const char *prog) {
             "  --cmd-file <path>         Tail input commands from file\n"
             "  --no-net                  Disable SLIRP networking\n"
             "  --sound                   Enable VirtIO sound output\n"
+            "  --res <WxH>               Boot framebuffer size (default: firmware's 800x600)\n"
             "  --stats <sec>             Print JIT statistics every N seconds\n"
             "  --log <level>             Log level (default: 0)\n",
             prog);
@@ -523,6 +524,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--disk1"))        cfg.disk1 = argv[++i];
         else if (!strcmp(argv[i], "--cpus"))         cfg.ncpus = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--ram"))          cfg.ram_mb = strtoull(argv[++i], NULL, 0);
+        else if (!strcmp(argv[i], "--res"))          sscanf(argv[++i], "%ux%u", &cfg.fb_width, &cfg.fb_height);
         else if (!strcmp(argv[i], "--share"))        cfg.share_dir = argv[++i];
         else if (!strcmp(argv[i], "--screenshot"))   targs.screenshot_path = argv[++i];
         else if (!strcmp(argv[i], "--screenshot-after")) targs.screenshot_after = atoi(argv[++i]);
