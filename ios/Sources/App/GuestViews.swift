@@ -1,18 +1,29 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
+import GameController
 import SwiftUI
 import UIKit
 
-/// Sends hardware-keyboard presses to the guest. `UIKey.keyCode` is already the USB HID usage.
-private func forwardPresses(_ presses: Set<UIPress>, down: Bool) -> Bool {
-    var handled = false
-    for press in presses {
-        guard let key = press.key else { continue }
-        let code = key.keyCode.rawValue
-        guard code >= 0x04, code <= 0xe7 else { continue }
-        GuestKeyboard.shared.raw(UInt8(code), down: down)
-        handled = true
+/// A hardware keyboard, read through GameController so that it reaches Windows whatever has
+/// focus in the app. `GCKeyCode` is the USB HID usage, which is what the guest's keyboard speaks.
+final class HardwareKeyboard {
+    static let shared = HardwareKeyboard()
+    private var observer: NSObjectProtocol?
+
+    func start() {
+        guard observer == nil else { return }
+        observer = NotificationCenter.default.addObserver(forName: .GCKeyboardDidConnect, object: nil, queue: .main) { [weak self] _ in
+            self?.attach()
+        }
+        attach()
     }
-    return handled
+
+    private func attach() {
+        GCKeyboard.coalesced?.keyboardInput?.keyChangedHandler = { _, _, keyCode, pressed in
+            let code = keyCode.rawValue
+            guard code >= 0x04, code <= 0xe7 else { return }
+            GuestKeyboard.shared.raw(UInt8(code), down: pressed)
+        }
+    }
 }
 
 /// The layer Windows is drawn into.
@@ -47,8 +58,7 @@ final class MetalCanvasView: UIView {
     }
 }
 
-/// The guest's screen: picture below, touch surface on top. Holds first responder while the
-/// software keyboard is away, so a hardware keyboard always reaches Windows.
+/// The guest's screen: picture below, touch surface on top.
 final class GuestScreenView: UIView {
     let canvas = MetalCanvasView()
     let touch = TouchSurface()
@@ -69,46 +79,16 @@ final class GuestScreenView: UIView {
         touch.frame = bounds
     }
 
-    override var canBecomeFirstResponder: Bool { true }
-
     override func didMoveToWindow() {
         super.didMoveToWindow()
-        if window != nil { DispatchQueue.main.async { [weak self] in self?.claimKeyboardFocus() } }
-    }
-
-    func claimKeyboardFocus() {
-        guard window != nil, !(window?.firstResponderIsTextInput ?? false) else { return }
-        becomeFirstResponder()
-    }
-
-    override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
-        if !forwardPresses(presses, down: true) { super.pressesBegan(presses, with: event) }
-    }
-
-    override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
-        if !forwardPresses(presses, down: false) { super.pressesEnded(presses, with: event) }
-    }
-
-    override func pressesCancelled(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
-        if !forwardPresses(presses, down: false) { super.pressesCancelled(presses, with: event) }
-    }
-}
-
-private extension UIWindow {
-    var firstResponderIsTextInput: Bool {
-        func find(_ v: UIView) -> UIView? {
-            if v.isFirstResponder { return v }
-            for s in v.subviews { if let r = find(s) { return r } }
-            return nil
-        }
-        return find(self) is UIKeyInput
+        if window != nil { HardwareKeyboard.shared.start() }
     }
 }
 
 struct GuestScreen: UIViewRepresentable {
     @ObservedObject var settings: AppSettings
     let guestSize: CGSize
-    let keyboardShown: Bool
+    let desktopRect: CGRect
     let onThreeFingerTap: () -> Void
 
     func makeUIView(context: Context) -> GuestScreenView {
@@ -126,7 +106,7 @@ struct GuestScreen: UIViewRepresentable {
             t.guestHeight = Double(guestSize.height)
         }
         t.onThreeFingerTap = onThreeFingerTap
-        if !keyboardShown { view.claimKeyboardFocus() }
+        t.desktopRect = desktopRect
     }
 }
 
@@ -192,17 +172,18 @@ final class KeyInputView: UIView, UIKeyInput, UITextInputTraits {
         return ok
     }
 
-    // A hardware keyboard while the software one is up: send the real keys and skip insertText.
+    // A hardware keyboard while the software one is up: HardwareKeyboard already sends the real
+    // keys, so swallow the presses here or each one would also arrive as typed text.
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
-        if !forwardPresses(presses, down: true) { super.pressesBegan(presses, with: event) }
+        if presses.contains(where: { $0.key == nil }) { super.pressesBegan(presses, with: event) }
     }
 
     override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
-        if !forwardPresses(presses, down: false) { super.pressesEnded(presses, with: event) }
+        if presses.contains(where: { $0.key == nil }) { super.pressesEnded(presses, with: event) }
     }
 
     override func pressesCancelled(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
-        if !forwardPresses(presses, down: false) { super.pressesCancelled(presses, with: event) }
+        if presses.contains(where: { $0.key == nil }) { super.pressesCancelled(presses, with: event) }
     }
 }
 
@@ -341,6 +322,9 @@ final class KeyBar: UIInputView {
         let b = UIButton(configuration: cfg)
         b.accessibilityLabel = title
         b.setContentCompressionResistancePriority(.required, for: .horizontal)
+        b.setContentHuggingPriority(.required, for: .horizontal)
+        if symbol != nil { b.widthAnchor.constraint(equalToConstant: 44).isActive = true }
+        b.heightAnchor.constraint(equalToConstant: 36).isActive = true
         return b
     }
 

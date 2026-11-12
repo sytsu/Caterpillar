@@ -99,9 +99,10 @@ struct HomeView: View {
     private func row<Trailing: View>(title: String, detail: String, state: RowState,
                                      @ViewBuilder trailing: () -> Trailing) -> some View {
         HStack(spacing: 12) {
-            Image(systemName: state == .good ? "checkmark.circle.fill" : state == .needed ? "circle.dashed" : "circle")
-                .font(.system(size: 17))
-                .foregroundStyle(state == .good ? Palette.accent : Color.white.opacity(state == .needed ? 0.7 : 0.3))
+            Image(systemName: state == .good ? "checkmark.circle.fill" : state == .needed ? "circle.dashed"
+                              : state == .info ? "display" : "circle")
+                .font(.system(size: state == .info ? 14 : 17))
+                .foregroundStyle(state == .good ? Palette.accent : Color.white.opacity(state == .pending ? 0.3 : 0.7))
                 .frame(width: 20)
             VStack(alignment: .leading, spacing: 2) {
                 Text(title).font(.body.weight(.medium))

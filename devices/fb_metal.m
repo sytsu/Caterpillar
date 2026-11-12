@@ -49,6 +49,80 @@ void hv_fb_metal_set_nearest(int on) {
     atomic_store(&g_fb_redraw, 1);
 }
 
+/* Where the guest's desktop sits inside the framebuffer, when it is smaller than it.
+   Windows keeps the desktop size it last used with the basic display driver, and the driver
+   scales that into the framebuffer with black bars: at the sides if the desktop is narrower,
+   above and below if it is wider. The app needs the rectangle to keep touches lined up. */
+static os_unfair_lock g_content_lock = OS_UNFAIR_LOCK_INIT;
+static uint32_t g_content[4];      /* x, y, w, h of the last stable finding; w == 0 means none */
+static uint32_t g_content_seen[4];
+static int g_content_streak;
+
+#define CONTENT_STABLE_CHECKS 10   /* checks half a second apart */
+
+static int px_black(const uint8_t *p) { return (p[0] | p[1] | p[2]) == 0; }
+
+static int column_black(const uint8_t *px, uint32_t w, uint32_t h, uint32_t x) {
+    for (uint32_t y = 0; y < h; y += 3)
+        if (!px_black(px + ((size_t)y * w + x) * 4)) return 0;
+    return 1;
+}
+
+static int row_black(const uint8_t *px, uint32_t w, uint32_t y) {
+    const uint8_t *row = px + (size_t)y * w * 4;
+    for (uint32_t x = 0; x < w; x += 3)
+        if (!px_black(row + (size_t)x * 4)) return 0;
+    return 1;
+}
+
+/* Bars on exactly two opposite sides, equal in size, and a picture in between: a scaled desktop.
+   A boot logo or a dialog on a black screen has black on all four sides and is not one. */
+static void find_content(const uint8_t *px, uint32_t w, uint32_t h, uint32_t out[4]) {
+    out[0] = out[1] = out[2] = out[3] = 0;
+    if (w < 320 || h < 240) return;
+    uint32_t l = 0, r = 0, t = 0, b = 0;
+    while (l < w / 2 && column_black(px, w, h, l)) l++;
+    if (l >= w / 2) return; /* nothing on screen */
+    while (r < w / 2 && column_black(px, w, h, w - 1 - r)) r++;
+    while (t < h / 2 && row_black(px, w, t)) t++;
+    while (b < h / 2 && row_black(px, w, h - 1 - b)) b++;
+
+    int sides = l >= 16 && (l > r ? l - r : r - l) <= 2 && t == 0 && b == 0;
+    int ends = t >= 16 && (t > b ? t - b : b - t) <= 2 && l == 0 && r == 0;
+    if (!sides && !ends) return;
+    out[0] = l;
+    out[1] = t;
+    out[2] = w - l - r;
+    out[3] = h - t - b;
+}
+
+static void track_content(const uint8_t *px, uint32_t w, uint32_t h) {
+    uint32_t now[4];
+    find_content(px, w, h, now);
+    os_unfair_lock_lock(&g_content_lock);
+    if (memcmp(now, g_content_seen, sizeof now) == 0) {
+        if (g_content_streak < CONTENT_STABLE_CHECKS) g_content_streak++;
+    } else {
+        memcpy(g_content_seen, now, sizeof now);
+        g_content_streak = 0;
+    }
+    if (g_content_streak >= CONTENT_STABLE_CHECKS) memcpy(g_content, now, sizeof now);
+    os_unfair_lock_unlock(&g_content_lock);
+}
+
+int hv_fb_metal_content_rect(uint32_t *x, uint32_t *y, uint32_t *w, uint32_t *h) {
+    os_unfair_lock_lock(&g_content_lock);
+    uint32_t c[4];
+    memcpy(c, g_content, sizeof c);
+    os_unfair_lock_unlock(&g_content_lock);
+    if (c[2] == 0) return 0;
+    *x = c[0];
+    *y = c[1];
+    *w = c[2];
+    *h = c[3];
+    return 1;
+}
+
 /* Rows compared and uploaded together. */
 #define FB_BAND_ROWS 16u
 
@@ -220,6 +294,7 @@ static int sync_shadow(uint8_t *shadow, const uint8_t *px, uint32_t w, uint32_t 
                        bytesPerRow:(NSUInteger)w * 4];
             redraw = YES;
         }
+        if (tickCount % 30 == 0) track_content(shadow, w, h);
         if (!redraw) {
             os_unfair_lock_unlock(&lock);
             return;

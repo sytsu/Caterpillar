@@ -232,6 +232,13 @@ static void unpack_progress_cb(uint64_t done, uint64_t total, void *opaque) {
     return 0;
 }
 
+- (CGRect)desktopRect {
+    uint32_t fw = 0, fh = 0, x = 0, y = 0, w = 0, h = 0;
+    if (!_vmRunning || hv_winvm_display_size(&fw, &fh) != 0 || fw == 0 || fh == 0) return CGRectMake(0, 0, 1, 1);
+    if (!hv_fb_metal_content_rect(&x, &y, &w, &h)) return CGRectMake(0, 0, 1, 1);
+    return CGRectMake((CGFloat)x / fw, (CGFloat)y / fh, (CGFloat)w / fw, (CGFloat)h / fh);
+}
+
 - (uint64_t)presentedFrames {
     return _vmRunning ? hv_winvm_display_frames() : 0;
 }

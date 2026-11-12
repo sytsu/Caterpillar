@@ -39,6 +39,10 @@ final class VMController: ObservableObject {
     @Published var importError: String?
     @Published var guestLink: GuestLink?
     @Published private(set) var plan: DisplayPlan?
+    /// Where Windows' desktop sits in the picture (0...1). Smaller than the whole picture when
+    /// Windows is still set to a desktop size from another screen.
+    @Published private(set) var desktopRect = CGRect(x: 0, y: 0, width: 1, height: 1)
+    var desktopIsScaled: Bool { desktopRect.width < 0.985 || desktopRect.height < 0.985 }
 
     let settings = AppSettings.shared
     let isSimulator = WinIOSBridge.shared.isSimulator
@@ -264,6 +268,8 @@ final class VMController: ObservableObject {
         fps = Int(frames >= lastFrames ? frames - lastFrames : 0)
         lastFrames = frames
         idlePercent = bridge.guestIdlePercent
+        let rect = bridge.desktopRect
+        if rect != desktopRect { desktopRect = rect }
         let w = bridge.framebufferWidth, h = bridge.framebufferHeight
         let size = CGSize(width: Int(w), height: Int(h))
         if size != guestSize { guestSize = size }

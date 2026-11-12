@@ -20,6 +20,7 @@ struct SessionView: View {
     @State private var confirmShutDown = false
     @State private var confirmStop = false
     @State private var toast: String?
+    @State private var hideSizeHint = false
 
     var body: some View {
         GeometryReader { geo in
@@ -35,7 +36,7 @@ struct SessionView: View {
                 }
                 KeyboardHost(isShown: $keyboardShown, showsTop: $showsTop, canFlip: full.width > full.height)
                     .frame(width: 1, height: 1)
-                overlays(full: full)
+                overlays(full: full, top: full.width > full.height ? 10 : insets.top + 8)
             }
             .frame(width: full.width, height: full.height, alignment: .topLeading)
             .ignoresSafeArea()
@@ -110,10 +111,14 @@ struct SessionView: View {
             .frame(width: frame.width, height: frame.height)
             .offset(x: frame.minX, y: frame.minY - lift)
 
-        controls(vertical: true)
-            .opacity(margin >= columnWidth ? 1 : 0.7)
-            .frame(width: columnWidth, height: full.height - keyboardHeight)
-            .offset(x: columnX - columnWidth / 2, y: 0)
+        // With the keyboard up there is no room for the column; the key bar has what is needed.
+        if keyboardHeight == 0 {
+            controls(vertical: true)
+                .opacity(margin >= columnWidth ? 1 : 0.7)
+                .frame(width: columnWidth, height: full.height)
+                .offset(x: columnX - columnWidth / 2, y: 0)
+                .transition(.opacity)
+        }
     }
 
     @ViewBuilder
@@ -151,7 +156,7 @@ struct SessionView: View {
     }
 
     private var screen: some View {
-        GuestScreen(settings: settings, guestSize: vm.guestSize, keyboardShown: keyboardShown) {
+        GuestScreen(settings: settings, guestSize: vm.guestSize, desktopRect: vm.desktopRect) {
             keyboardShown.toggle()
         }
     }
@@ -198,12 +203,16 @@ struct SessionView: View {
 
     private var menu: some View {
         Menu {
-            Section {
+            Menu {
                 Button("Ctrl + Alt + Del") { WinIOSBridge.shared.sendCtrlAltDel() }
                 Button("Task Manager") { GuestKeyboard.shared.tap(HID.escape, modifiers: [HID.ctrl, HID.shift]) }
                 Button("Switch App") { GuestKeyboard.shared.tap(HID.tab, modifiers: [HID.alt]) }
                 Button("Close Window") { GuestKeyboard.shared.tap(HID.f1 + 3, modifiers: [HID.alt]) }
+                Button("Show Desktop") { GuestKeyboard.shared.tap(0x07, modifiers: [HID.win]) }
                 Button("Escape") { GuestKeyboard.shared.tap(HID.escape) }
+                Button("Print Screen") { GuestKeyboard.shared.tap(HID.printScreen) }
+            } label: {
+                Label("Send Keys", systemImage: "command")
             }
             Section {
                 Button {
@@ -236,7 +245,7 @@ struct SessionView: View {
     // MARK: Overlays
 
     @ViewBuilder
-    private func overlays(full: CGSize) -> some View {
+    private func overlays(full: CGSize, top: CGFloat) -> some View {
         if vm.phase == .running, vm.guestSize.width == 0 {
             VStack(spacing: 12) {
                 ProgressView()
@@ -268,6 +277,15 @@ struct SessionView: View {
             .frame(width: full.width, height: full.height)
         }
 
+        if vm.phase == .running, vm.desktopIsScaled, !hideSizeHint, keyboardHeight == 0 {
+            // At the top: the bottom edge is where the Windows taskbar is.
+            sizeHint
+                .padding(.horizontal, 12)
+                .frame(width: full.width)
+                .offset(y: top)
+                .transition(.opacity)
+        }
+
         if let toast {
             Text(toast)
                 .font(.footnote.weight(.medium))
@@ -275,10 +293,41 @@ struct SessionView: View {
                 .padding(.vertical, 9)
                 .glass(in: Capsule())
                 .frame(width: full.width)
-                .offset(y: 16)
+                .offset(y: top + 6)
                 .transition(.opacity)
                 .allowsHitTesting(false)
         }
+    }
+
+    /// Windows remembers the desktop size it last used and scales it into the picture. Only
+    /// Windows can change that, so say where.
+    private var sizeHint: some View {
+        HStack(alignment: .top, spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Windows is set to a smaller desktop")
+                    .font(.footnote.weight(.semibold))
+                Text("To fill the screen, open Settings › System › Display in Windows and set Display resolution to \(vm.guestSize.width > 0 ? "\(Int(vm.guestSize.width)) × \(Int(vm.guestSize.height))" : "the recommended size"). Touch stays lined up meanwhile.")
+                    .font(.caption)
+                    .foregroundStyle(Palette.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Button {
+                withAnimation(.easeOut(duration: 0.2)) { hideSizeHint = true }
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.8))
+                    .frame(width: 28, height: 28)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Dismiss")
+        }
+        .padding(.leading, 14)
+        .padding(.trailing, 8)
+        .padding(.vertical, 10)
+        .frame(maxWidth: 440)
+        .glass(in: RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 
     private func show(_ text: String) {

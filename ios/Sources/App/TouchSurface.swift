@@ -15,6 +15,9 @@ final class TouchSurface: UIView {
     /// Guest framebuffer width in pixels: sets how far the pointer travels per point of finger travel.
     var guestWidth: Double = 1344
     var guestHeight: Double = 720
+    /// The part of this view the guest's desktop is drawn in (0...1). Touches map onto that part,
+    /// so they stay lined up when Windows scales a smaller desktop into the picture.
+    var desktopRect = CGRect(x: 0, y: 0, width: 1, height: 1)
     var onThreeFingerTap: (() -> Void)?
 
     private let pointer = GuestPointer.shared
@@ -188,8 +191,10 @@ final class TouchSurface: UIView {
     // MARK: Pieces
 
     private func moveAbsolute(to p: CGPoint) {
-        guard bounds.width > 0, bounds.height > 0 else { return }
-        pointer.move(toX: Double(p.x / bounds.width), y: Double(p.y / bounds.height))
+        guard bounds.width > 0, bounds.height > 0, desktopRect.width > 0, desktopRect.height > 0 else { return }
+        let x = (p.x / bounds.width - desktopRect.minX) / desktopRect.width
+        let y = (p.y / bounds.height - desktopRect.minY) / desktopRect.height
+        pointer.move(toX: Double(x), y: Double(y))
     }
 
     private func moveRelative(from a: CGPoint, to b: CGPoint, dt: TimeInterval) {

@@ -43,7 +43,8 @@ See [How the resolution is set](#how-the-resolution-is-set).
 
 **Keyboard.** The iOS keyboard gets an extra row with Esc, Tab, Ctrl, Alt, Win, Shift, the arrows,
 Del, Home, End, Page Up, Page Down and F1–F12. Ctrl, Alt, Win and Shift stay armed for the next key,
-so Ctrl then C is Ctrl+C. A hardware keyboard and mouse are passed straight through.
+so Ctrl then C is Ctrl+C. A hardware keyboard and mouse are passed straight through. (The hardware
+keyboard and mouse paths have not been tried on a device yet.)
 
 **Less to set up.** The UEFI firmware ships inside the app and the variable store is created for you;
 the only file you need is the disk image, and there is an Import button for it.
@@ -51,10 +52,10 @@ the only file you need is the disk image, and there is an Import button for it.
 **Settings.** Resolution (Fast, Balanced, Sharp, Native, Classic 4:3), memory, processor cores, crisp
 pixels, a 30 fps limit, pointer speed, scroll direction, start on launch.
 
-**Smaller things.** A menu with Ctrl+Alt+Del, Task Manager, Switch App and Close Window; type the iOS
-clipboard into Windows; save a screenshot to Files; shut down or force stop; the frame rate drops to
-30 by itself when the device runs hot; and the screen no longer misses small changes such as the
-pointer moving over a still desktop.
+**Smaller things.** A menu that sends Ctrl+Alt+Del, Task Manager, Switch App, Close Window and other
+key combinations; type the iOS clipboard into Windows; save a screenshot to Files; lock the
+orientation; shut down or force stop; the frame rate drops to 30 by itself when the device runs hot;
+and the screen no longer misses small changes such as the pointer moving over a still desktop.
 
 ## Install
 
@@ -99,6 +100,15 @@ on Caterpillar's first screen, or put it at `Files › Caterpillar › Machines 
 A Windows 11 ARM64 image installed elsewhere, for example in a virtual machine on a Mac, also boots
 as long as Windows is on a GPT disk and was not encrypted with BitLocker.
 
+### If Windows does not fill the picture
+
+Windows remembers the desktop size it last used with its basic display driver, and applies it on any
+machine that has no display driver of its own. An image that last ran at 800×600 or 1024×768 comes up
+at that size, scaled into the middle of the screen with black bars. Caterpillar notices, keeps touch
+lined up with the scaled desktop, and shows a hint. The fix is in Windows, once: **Settings › System ›
+Display › Display resolution**, and pick the size Caterpillar booted at (the one marked Recommended).
+The same applies after changing Caterpillar's resolution setting.
+
 ## How the resolution is set
 
 Windows has no display driver for this machine, so it draws into the framebuffer the firmware set up
@@ -126,12 +136,17 @@ scripts/build_ipa.sh simulator    # build/sim/Caterpillar.app
 
 The first run downloads and cross-compiles libffi, glib and libslirp, and fetches the EDK2 firmware
 that QEMU distributes (pinned by checksum). `BUNDLE_ID=com.example.caterpillar scripts/build_ipa.sh`
-builds under another bundle identifier; by default Caterpillar keeps WindowsiOS's, so it installs
-over WindowsiOS and keeps the disk image already on the device.
+builds under another bundle identifier (the default is `com.sytsu.caterpillar`). Caterpillar installs
+next to WindowsiOS, not over it; move `windows11.img` across in Files if you are switching.
 
 The Simulator build runs the whole machine, JIT included, because a Simulator app is a Mac process.
 That makes it a real test bed: put a `windows11.img` (or a symbolic link to one) in the app's
-`Documents/Machines/Win11` folder.
+`Documents/Machines/Win11` folder. An empty 80 MB file is enough to reach the UEFI shell.
+
+```bash
+scripts/ui_test.sh <simulator-udid>                       # UI tests; screenshots in build/ui-shots
+scripts/ui_drive.sh <simulator-udid> "tap 0.5 0.5; shot a" # touch a running session without restarting it
+```
 
 The engine also runs as a Mac program, which is how the core is tested:
 

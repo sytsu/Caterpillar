@@ -8,7 +8,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 UDID="${1:?usage: $0 <device-udid> [bundle-id]}"
-BUNDLE_ID="${2:-me.ammaar.windowsios}"
+BUNDLE_ID="${2:-com.sytsu.caterpillar}"
 LAUNCH_JSON="$ROOT/work/launch.json"
 
 mkdir -p "$ROOT/work"

@@ -40,5 +40,8 @@ int hv_fb_save_png(HvFbDisplay *fb, const char *path);
 /* Presentation rate (60 or 30) and magnification filter (0 = linear, 1 = nearest). Any thread. */
 void hv_fb_metal_set_fps(int fps);
 void hv_fb_metal_set_nearest(int on);
+/* When the guest draws a desktop smaller than the framebuffer and scales it in with black bars,
+   the rectangle (in framebuffer pixels) the desktop occupies; returns 0 when it fills the frame. */
+int hv_fb_metal_content_rect(uint32_t *x, uint32_t *y, uint32_t *w, uint32_t *h);
 
 #endif

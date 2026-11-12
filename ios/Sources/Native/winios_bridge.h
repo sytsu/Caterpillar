@@ -22,6 +22,9 @@ typedef void (^WinIOSStateCallback)(void);
 @property (nonatomic, readonly) uint32_t framebufferWidth;
 @property (nonatomic, readonly) uint32_t framebufferHeight;
 @property (nonatomic, readonly) uint64_t presentedFrames;
+/* The part of the picture the guest's desktop occupies, in 0...1 of the framebuffer. The whole
+   unit square unless the guest scales a smaller desktop into the frame with black bars. */
+@property (nonatomic, readonly) CGRect desktopRect;
 @property (nonatomic, readonly) uint64_t availableMemoryMB;
 @property (nonatomic, readonly) BOOL usbKeyboardReady;
 @property (nonatomic, readonly) BOOL usbTabletReady;
