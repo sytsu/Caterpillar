@@ -435,6 +435,47 @@ static int do_proppatch(Conn *c, Request *r) {
     return rc;
 }
 
+/* GET on a folder: a plain page of links, so the folder can be browsed from the guest with any web
+   browser, without a WebDAV client. */
+static int serve_index(Conn *c, Request *r, const char *local) {
+    Text t = {0};
+    int at_root = strcmp(r->path, "/") == 0;
+    const char *sep = r->path[strlen(r->path) - 1] == '/' ? "" : "/";
+    adds(&t, "<!doctype html><html><head><meta charset=\"utf-8\"><title>Shared folder</title>"
+             "<style>body{font:15px system-ui,Segoe UI,sans-serif;margin:2em;max-width:44em}"
+             "a{display:block;padding:.45em 0;border-bottom:1px solid #ddd;text-decoration:none}"
+             "small{color:#666;float:right}</style></head><body><h3>Shared folder ");
+    add_xml(&t, r->path);
+    adds(&t, "</h3>");
+    if (!at_root) adds(&t, "<a href=\"..\">.. (up)</a>");
+    DIR *d = opendir(local);
+    struct dirent *e;
+    int count = 0;
+    while (d && (e = readdir(d))) {
+        if (e->d_name[0] == '.' || !strncmp(e->d_name, TEMP_PREFIX, strlen(TEMP_PREFIX))) continue;
+        char child[PATH_MAX], url[PATH_MAX];
+        struct stat cs;
+        if (snprintf(child, sizeof child, "%s/%s", local, e->d_name) >= (int)sizeof child) continue;
+        if (snprintf(url, sizeof url, "%s%s%s", r->path, sep, e->d_name) >= (int)sizeof url) continue;
+        if (lstat(child, &cs) != 0 || !(S_ISREG(cs.st_mode) || S_ISDIR(cs.st_mode))) continue; /* no links out of the folder */
+        adds(&t, "<a href=\"");
+        add_url(&t, url);
+        if (S_ISDIR(cs.st_mode)) adds(&t, "/");
+        adds(&t, "\">");
+        add_xml(&t, e->d_name);
+        if (S_ISDIR(cs.st_mode)) adds(&t, "/");
+        else addf(&t, "<small>%.1f MB</small>", (double)cs.st_size / (1024.0 * 1024.0));
+        adds(&t, "</a>");
+        count++;
+    }
+    if (d) closedir(d);
+    if (!count) adds(&t, "<p>Nothing here yet. Put files in the Shared folder on the device.</p>");
+    adds(&t, "</body></html>");
+    int rc = respond(c, r, 200, "OK", "Content-Type: text/html; charset=utf-8\r\nCache-Control: no-store\r\n", t.s, t.len);
+    free(t.s);
+    return rc;
+}
+
 static int do_get(Conn *c, Request *r) {
     if (body_discard(c, r) != 0) return -1;
     char local[PATH_MAX];
@@ -447,7 +488,7 @@ static int do_get(Conn *c, Request *r) {
     }
     if (S_ISDIR(st.st_mode)) {
         close(fd);
-        return respond_empty(c, r, 405, "Method Not Allowed");
+        return serve_index(c, r, local);
     }
     long long from = 0, to = st.st_size - 1;
     int partial = 0;
