@@ -58,6 +58,7 @@ static void on_ramfb_write(void *opaque, const uint8_t *data, uint32_t len) {
     fb->fourcc = fourcc;
     fb->active = 1;
     pthread_mutex_unlock(&fb->mu);
+    hv_fb_metal_request_redraw();
 
     fprintf(stderr, "winvm: ramfb configured %ux%u stride=%u fourcc=0x%08x at PA 0x%llx\n",
             width, height, stride, fourcc, (unsigned long long)addr);
@@ -76,6 +77,14 @@ HvFbDisplay *hv_fb_display_create(HvMachine *m, HvFwCfg *fw_cfg) {
 int hv_fb_display_get_frame(HvFbDisplay *fb, const uint8_t **pixels, uint32_t *w, uint32_t *h, uint32_t *stride) {
     if (!fb) return -1;
     pthread_mutex_lock(&fb->mu);
+    if (fb->scanout) {
+        *pixels = fb->scanout;
+        *w = fb->scanout_w;
+        *h = fb->scanout_h;
+        *stride = fb->scanout_stride;
+        pthread_mutex_unlock(&fb->mu);
+        return 0;
+    }
     if (!fb->active || !fb->fb_host || !fb->width || !fb->height) {
         pthread_mutex_unlock(&fb->mu);
         return -1;
@@ -86,4 +95,52 @@ int hv_fb_display_get_frame(HvFbDisplay *fb, const uint8_t **pixels, uint32_t *w
     *stride = fb->stride;
     pthread_mutex_unlock(&fb->mu);
     return 0;
+}
+
+void hv_fb_display_set_scanout(HvFbDisplay *fb, const uint8_t *pixels, uint32_t w, uint32_t h, uint32_t stride) {
+    if (!fb) return;
+    pthread_mutex_lock(&fb->mu);
+    int was = fb->scanout != NULL;
+    fb->scanout = (pixels && w && h) ? pixels : NULL;
+    fb->scanout_w = w;
+    fb->scanout_h = h;
+    fb->scanout_stride = stride;
+    if (!fb->scanout) fb->cursor_on = 0; /* the pointer belongs to the adapter's picture */
+    fb->cursor_gen++;
+    pthread_mutex_unlock(&fb->mu);
+    if (was != (pixels != NULL))
+        fprintf(stderr, "winvm: display %s\n", pixels ? "taken over by the display adapter's driver" : "back on the boot framebuffer");
+    if (pixels) fprintf(stderr, "winvm: adapter scanout %ux%u\n", w, h);
+    hv_fb_metal_request_redraw();
+}
+
+void hv_fb_display_set_cursor(HvFbDisplay *fb, const uint8_t *bgra, uint32_t hot_x, uint32_t hot_y,
+                              int32_t x, int32_t y, int visible) {
+    if (!fb) return;
+    pthread_mutex_lock(&fb->mu);
+    if (bgra) {
+        memcpy(fb->cursor, bgra, sizeof fb->cursor);
+        fb->cursor_hot_x = hot_x;
+        fb->cursor_hot_y = hot_y;
+    }
+    fb->cursor_x = x;
+    fb->cursor_y = y;
+    fb->cursor_on = visible;
+    fb->cursor_gen++;
+    pthread_mutex_unlock(&fb->mu);
+    hv_fb_metal_request_redraw();
+}
+
+uint64_t hv_fb_display_get_cursor(HvFbDisplay *fb, uint8_t *bgra_out, int *visible, int32_t *x, int32_t *y,
+                                  uint32_t *hot_x, uint32_t *hot_y) {
+    pthread_mutex_lock(&fb->mu);
+    if (bgra_out) memcpy(bgra_out, fb->cursor, sizeof fb->cursor);
+    *visible = fb->cursor_on && fb->scanout != NULL;
+    *x = fb->cursor_x;
+    *y = fb->cursor_y;
+    *hot_x = fb->cursor_hot_x;
+    *hot_y = fb->cursor_hot_y;
+    uint64_t gen = fb->cursor_gen;
+    pthread_mutex_unlock(&fb->mu);
+    return gen;
 }

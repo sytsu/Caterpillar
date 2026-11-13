@@ -72,6 +72,7 @@ typedef struct HvWinVirt {
     HvPl061 *gpio;
     HvFwCfg *fw_cfg;
     HvFbDisplay *fb;
+    struct HvVirtioGpu *gpu;   /* display adapter for guests with the virtio-gpu driver */
     HvPcie *pcie;
     HvVirtioNet *net;
     HvNvme *nvme0;

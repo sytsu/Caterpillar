@@ -89,6 +89,22 @@ final class SmokeTests: XCTestCase {
         shot("landscape-stopped")
     }
 
+    /// "Fill the whole screen": the picture covers the display, and the controls fold to a tab.
+    func testFillSession() {
+        launch(["-general.autoStart", "YES", "-display.orientation", "landscape", "-display.fit", "edge",
+                "-display.controlsFolded", "NO"])
+        let keyboard = app.buttons["Keyboard"]
+        XCTAssertTrue(keyboard.waitForExistence(timeout: 90), "session did not appear")
+        sleep(14)
+        shot("fill-session")
+        app.buttons["Hide controls"].tap()
+        XCTAssertTrue(app.buttons["Show controls"].waitForExistence(timeout: 5), "controls did not fold")
+        sleep(1)
+        shot("fill-folded")
+        app.buttons["Show controls"].tap()
+        XCTAssertTrue(keyboard.waitForExistence(timeout: 5), "controls did not come back")
+    }
+
     func testPortraitSession() {
         launch(["-general.autoStart", "YES", "-display.orientation", "portrait"])
         let keyboard = app.buttons["Keyboard"]

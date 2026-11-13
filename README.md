@@ -107,19 +107,32 @@ as long as Windows is on a GPT disk and was not encrypted with BitLocker.
 as a network drive: `net use Z: \\10.0.2.4\DavWWWRoot`. Mapping needs Windows' WebClient service,
 which a trimmed-down image may have turned off.
 
-### If Windows does not fill the picture
+### The display driver
 
-Windows remembers the desktop size it last used with its basic display driver, and applies it on any
-machine that has no display driver of its own. An image that last ran at 800×600 or 1024×768 comes up
-at that size, scaled into the middle of the screen with black bars. Caterpillar notices, keeps touch
-lined up with the scaled desktop, and shows a hint. The fix is in Windows, once: **Settings › System ›
-Display › Display resolution**, and pick the size Caterpillar booted at (the one marked Recommended).
-The same applies after changing Caterpillar's resolution setting.
+Caterpillar's machine has a display adapter (virtio-gpu) whose monitor is exactly the size chosen in
+Settings. With its driver, **viogpudo** from the [virtio-win](https://github.com/virtio-win/virtio-win-pkg-scripts)
+drivers, Windows treats the phone as a real display of that size: it always starts at that
+resolution, with no manual step, and the pointer is drawn by the app instead of by Windows. An image
+that has run under QEMU, UTM or another virtio hypervisor usually has the driver already; otherwise
+install the virtio-win guest tools inside Windows once.
+
+Without the driver Windows draws into the firmware's boot framebuffer with its basic display driver.
+That works, but Windows then reuses the desktop size it last had (often 800×600 or 1024×768) and
+scales it into the middle of the screen. Caterpillar notices, keeps touch lined up, and shows a hint;
+the manual fix is **Settings › System › Display › Display resolution** in Windows, picking the size
+Caterpillar booted at.
+
+### Filling the whole screen
+
+**Settings › Display › Picture › Fill the whole screen** makes the display the full size of the phone's
+screen, corner to corner, with nothing stretched: Windows gets a wider monitor (1560×720 on an
+iPhone 16 instead of 1344×720). The camera housing and the rounded corners cover a little of the
+picture, and the controls fold away to a tab at the edge. It applies the next time Windows starts.
 
 ## How the resolution is set
 
-Windows has no display driver for this machine, so it draws into the framebuffer the firmware set up
-(GOP) and never changes its size. EDK2's `QemuRamfbDxe` driver keeps its list of sizes in a plain
+Until Windows' own display driver takes over (and always, if it is not installed), Windows draws
+into the framebuffer the firmware set up (GOP) and never changes its size. EDK2's `QemuRamfbDxe` driver keeps its list of sizes in a plain
 table: 640×480, 800×600, 1024×768. When that driver first talks to the virtual machine's
 configuration device, which is before it has sized its framebuffer, Caterpillar finds the table in
 guest memory next to the driver's code and rewrites its entries to the size it wants

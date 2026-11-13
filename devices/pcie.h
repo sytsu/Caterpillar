@@ -37,6 +37,8 @@ typedef struct HvPciDev {
     HvPciMsixEntry msix_table[HV_PCI_MAX_MSIX];
 
     void *opaque;
+    /* Optional: change what a config-space read returns (`value` is what the stored bytes say). */
+    uint64_t (*config_read)(struct HvPciDev *d, uint32_t reg, unsigned size, uint64_t value);
     uint64_t (*bar_read)(struct HvPciDev *d, int bar, uint64_t off, unsigned size);
     void (*bar_write)(struct HvPciDev *d, int bar, uint64_t off, uint64_t v, unsigned size);
     void (*on_config_write)(struct HvPciDev *d);

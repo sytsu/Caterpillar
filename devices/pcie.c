@@ -193,6 +193,7 @@ static uint64_t ecam_read(void *opaque, uint64_t off, unsigned size) {
     if (!d) return size == 8 ? ~0ull : (1ull << (size * 8)) - 1;
     uint64_t v = 0;
     memcpy(&v, d->config + reg, size > 4096 - reg ? 4096 - reg : size);
+    if (d->config_read) v = d->config_read(d, reg, size, v);
     if (getenv("HV_PCI_LOG") && slot == (uint32_t)atoi(getenv("HV_PCI_LOG")))
         fprintf(stderr, "pci %u: read %03x (%u) = %llx\n", slot, reg, size, (unsigned long long)v);
     return v;

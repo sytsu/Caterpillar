@@ -37,8 +37,10 @@ static void reset(HvVirtio *v) {
     v->status = 0;
     v->isr = 0;
     v->qsel = 0;
-    for (int i = 0; i < v->nq; i++) v->q[i] = (HvVirtq){.size = HV_VIRTQ_MAX_SIZE};
+    for (int i = 0; i < v->nq; i++) v->q[i] = (HvVirtq){.size = HV_VIRTQ_MAX_SIZE, .vector = 0xffff};
+    v->config_vector = 0xffff;
     hv_pci_set_intx(&v->pci, 0);
+    if (v->on_reset) v->on_reset(v);
 }
 
 static uint64_t common_read(HvVirtio *v, uint64_t off) {
@@ -48,13 +50,13 @@ static uint64_t common_read(HvVirtio *v, uint64_t off) {
     case 0x04: return v->dfsel < 2 ? (uint32_t)(v->features >> (32 * v->dfsel)) : 0;
     case 0x08: return v->gfsel;
     case 0x0c: return v->gfsel < 2 ? (uint32_t)(v->driver_features >> (32 * v->gfsel)) : 0;
-    case 0x10: return 0xffff;                  /* config_msix_vector: no MSI-X */
+    case 0x10: return v->config_vector;        /* config_msix_vector (0xffff without MSI-X) */
     case 0x12: return v->nq;
     case 0x14: return v->status;
     case 0x15: return v->config_gen;
     case 0x16: return v->qsel;
     case 0x18: return q ? q->size : 0;
-    case 0x1a: return 0xffff;
+    case 0x1a: return q ? q->vector : 0xffff;  /* queue_msix_vector */
     case 0x1c: return q ? q->enabled : 0;
     case 0x1e: return v->qsel;                 /* queue_notify_off = queue index */
     case 0x20: return q ? (uint32_t)q->desc : 0;
@@ -87,7 +89,13 @@ static void common_write(HvVirtio *v, uint64_t off, uint64_t val, unsigned size)
     case 0x14:
         if ((uint8_t)val == 0) reset(v);
         else v->status = (uint8_t)val;
+        if (getenv("HV_VIRTIO_CFG_LOG"))
+            fprintf(stderr, "virtio %04x: status %#x (features %#llx)\n", v->pci.config[2] | v->pci.config[3] << 8,
+                    (unsigned)(uint8_t)val, (unsigned long long)v->driver_features);
         break;
+    /* A vector the device cannot provide reads back as 0xffff, which is how the driver learns. */
+    case 0x10: v->config_vector = (uint16_t)val < v->pci.msix_nvec && v->pci.msix_cap ? (uint16_t)val : 0xffff; break;
+    case 0x1a: if (q) q->vector = (uint16_t)val < v->pci.msix_nvec && v->pci.msix_cap ? (uint16_t)val : 0xffff; break;
     case 0x16: v->qsel = (uint16_t)val; break;
     case 0x18:
         if (q && val && val <= HV_VIRTQ_MAX_SIZE && !(val & (val - 1))) q->size = (uint16_t)val;
@@ -132,6 +140,10 @@ static uint64_t bar_read(HvPciDev *d, int bar, uint64_t off, unsigned size) {
 static void bar_write(HvPciDev *d, int bar, uint64_t off, uint64_t val, unsigned size) {
     HvVirtio *v = d->opaque;
     if (bar != BAR) return;
+    static int trace = -1;
+    if (trace < 0) trace = getenv("HV_VIRTIO_TRACE") ? (int)strtol(getenv("HV_VIRTIO_TRACE"), NULL, 16) : 0;
+    if (trace && trace == (v->pci.config[2] | v->pci.config[3] << 8)) /* debugging: every register write of one device */
+        fprintf(stderr, "virtio %04x: write +%#llx (%u) = %#llx\n", trace, (unsigned long long)off, size, (unsigned long long)val);
     if (off < ISR) {
         common_write(v, off, val, size);
     } else if (off >= DEVICE && off < NOTIFY) {
@@ -161,8 +173,35 @@ void hv_virtio_init(HvVirtio *v, HvMachine *m, int device_id, uint32_t class_cod
     reset(v);
 }
 
+void hv_virtio_add_msix(HvVirtio *v, uint16_t nvec) {
+    hv_pci_add_bar(&v->pci, 2, 0x2000, 0);
+    /* 0x90: the notify capability at 0x70 is 20 bytes long and ends at 0x83. */
+    hv_pci_add_msix(&v->pci, 0x90, 2, 0x0000, 0x1000, nvec);
+}
+
 void hv_virtio_interrupt(HvVirtio *v) {
+    if (hv_pci_msix_enabled(&v->pci)) {
+        /* Which queue completed is not passed down: signal each queue's vector once. */
+        for (int i = 0; i < v->nq; i++) {
+            uint16_t vec = v->q[i].vector;
+            if (vec == 0xffff) continue;
+            int dup = 0;
+            for (int j = 0; j < i; j++) dup |= v->q[j].vector == vec;
+            if (!dup) hv_pci_msix_notify(&v->pci, vec);
+        }
+        return;
+    }
     v->isr |= 1;
+    hv_pci_set_intx(&v->pci, 1);
+}
+
+void hv_virtio_config_interrupt(HvVirtio *v) {
+    v->config_gen++;
+    if (hv_pci_msix_enabled(&v->pci)) {
+        if (v->config_vector != 0xffff) hv_pci_msix_notify(&v->pci, v->config_vector);
+        return;
+    }
+    v->isr |= 2;
     hv_pci_set_intx(&v->pci, 1);
 }
 

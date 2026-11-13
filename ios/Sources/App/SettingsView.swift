@@ -52,7 +52,7 @@ struct SettingsView: View {
             Text("Display")
         } footer: {
             Text(running
-                 ? "Resolution and picture shape are fixed while Windows runs. Changes apply the next time it starts."
+                 ? "Resolution and picture shape are set when Windows starts. Changes apply the next time it starts."
                  : "Windows draws everything on the processor, so fewer pixels is faster. Fast suits most things; raise the scale in Windows display settings if text looks small.")
         }
     }

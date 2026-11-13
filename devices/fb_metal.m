@@ -19,11 +19,15 @@ static NSString *const kFbShaderSource =
      "    float4 pos [[position]];\n"
      "    float2 uv;\n"
      "};\n"
-     "vertex VOut fb_vs(uint vid [[vertex_id]], constant float2 &scale [[buffer(0)]]) {\n"
+     "struct Place {\n"     /* where a quad goes in the drawable: half-size and centre, in clip space */
+     "    float2 scale;\n"
+     "    float2 centre;\n"
+     "};\n"
+     "vertex VOut fb_vs(uint vid [[vertex_id]], constant Place &place [[buffer(0)]]) {\n"
      "    const float2 quad[4] = { float2(-1,-1), float2(1,-1), float2(-1,1), float2(1,1) };\n"
      "    const float2 uvs[4]  = { float2(0,1),   float2(1,1),  float2(0,0),  float2(1,0) };\n"
      "    VOut o;\n"
-     "    o.pos = float4(quad[vid] * scale, 0.0, 1.0);\n"
+     "    o.pos = float4(quad[vid] * place.scale + place.centre, 0.0, 1.0);\n"
      "    o.uv  = uvs[vid];\n"
      "    return o;\n"
      "}\n"
@@ -33,6 +37,11 @@ static NSString *const kFbShaderSource =
      "    constexpr sampler sn(mag_filter::nearest, min_filter::linear, address::clamp_to_edge);\n"
      "    float4 c = nearest ? tex.sample(sn, in.uv) : tex.sample(sl, in.uv);\n"
      "    return float4(c.rgb, 1.0);\n"
+     "}\n"
+     /* The pointer image: straight alpha, blended over the picture. */
+     "fragment float4 fb_cursor_fs(VOut in [[stage_in]], texture2d<float> tex [[texture(0)]]) {\n"
+     "    constexpr sampler s(mag_filter::linear, min_filter::linear, address::clamp_to_edge);\n"
+     "    return tex.sample(s, in.uv);\n"
      "}\n";
 
 /* Presentation options, shared by every presenter (there is one display). */
@@ -42,6 +51,10 @@ static _Atomic int g_fb_redraw = 0;    /* force the next tick to draw */
 
 void hv_fb_metal_set_fps(int fps) {
     atomic_store(&g_fb_fps, fps <= 30 ? 30 : 60);
+}
+
+void hv_fb_metal_request_redraw(void) {
+    atomic_store(&g_fb_redraw, 1);
 }
 
 void hv_fb_metal_set_nearest(int on) {
@@ -134,7 +147,10 @@ int hv_fb_metal_content_rect(uint32_t *x, uint32_t *y, uint32_t *w, uint32_t *h)
     id<MTLDevice> device;
     id<MTLCommandQueue> queue;
     id<MTLRenderPipelineState> pipeline;
+    id<MTLRenderPipelineState> cursorPipeline;
     id<MTLTexture> texture;
+    id<MTLTexture> cursorTexture;
+    uint64_t cursorGen;
     uint32_t texW, texH;
     dispatch_source_t timer;
     _Atomic(uint64_t) framesPresented;
@@ -164,6 +180,25 @@ int hv_fb_metal_content_rect(uint32_t *x, uint32_t *y, uint32_t *w, uint32_t *h)
                 pd.fragmentFunction = [lib newFunctionWithName:@"fb_fs"];
                 pd.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
                 pipeline = [device newRenderPipelineStateWithDescriptor:pd error:&err];
+
+                MTLRenderPipelineDescriptor *cd = [[MTLRenderPipelineDescriptor alloc] init];
+                cd.vertexFunction = pd.vertexFunction;
+                cd.fragmentFunction = [lib newFunctionWithName:@"fb_cursor_fs"];
+                MTLRenderPipelineColorAttachmentDescriptor *ca = cd.colorAttachments[0];
+                ca.pixelFormat = MTLPixelFormatBGRA8Unorm;
+                ca.blendingEnabled = YES;
+                ca.sourceRGBBlendFactor = MTLBlendFactorSourceAlpha;
+                ca.destinationRGBBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
+                ca.sourceAlphaBlendFactor = MTLBlendFactorOne;
+                ca.destinationAlphaBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
+                cursorPipeline = [device newRenderPipelineStateWithDescriptor:cd error:&err];
+
+                MTLTextureDescriptor *ctd = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                                                                               width:HV_FB_CURSOR_SIZE
+                                                                                              height:HV_FB_CURSOR_SIZE
+                                                                                           mipmapped:NO];
+                ctd.usage = MTLTextureUsageShaderRead;
+                cursorTexture = [device newTextureWithDescriptor:ctd];
             }
         }
     }
@@ -263,6 +298,22 @@ static int sync_shadow(uint8_t *shadow, const uint8_t *px, uint32_t w, uint32_t 
         BOOL redraw = !CGSizeEqualToSize(dsize, lastDrawableSize);
         if (atomic_exchange(&g_fb_redraw, 0)) redraw = YES;
 
+        /* The display adapter's pointer: its own small image, drawn over the picture. */
+        static uint8_t cursorPixels[HV_FB_CURSOR_SIZE * HV_FB_CURSOR_SIZE * 4];
+        int cursorOn = 0;
+        int32_t cursorX = 0, cursorY = 0;
+        uint32_t hotX = 0, hotY = 0;
+        uint64_t gen = hv_fb_display_get_cursor(fb, cursorPixels, &cursorOn, &cursorX, &cursorY, &hotX, &hotY);
+        if (gen != cursorGen) {
+            cursorGen = gen;
+            redraw = YES;
+            if (cursorTexture)
+                [cursorTexture replaceRegion:MTLRegionMake2D(0, 0, HV_FB_CURSOR_SIZE, HV_FB_CURSOR_SIZE)
+                                 mipmapLevel:0
+                                   withBytes:cursorPixels
+                                 bytesPerRow:HV_FB_CURSOR_SIZE * 4];
+        }
+
         if (!texture || texW != w || texH != h) {
             MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
                                                                                           width:w
@@ -309,11 +360,11 @@ static int sync_shadow(uint8_t *shadow, const uint8_t *px, uint32_t w, uint32_t 
 
         float dstAspect = (float)(dsize.width / dsize.height);
         float srcAspect = (float)w / (float)h;
-        float scale[2] = {1.0f, 1.0f};
+        float place[4] = {1.0f, 1.0f, 0.0f, 0.0f}; /* scale, centre: see Place in the shader */
         if (dstAspect > srcAspect) {
-            scale[0] = srcAspect / dstAspect;
+            place[0] = srcAspect / dstAspect;
         } else {
-            scale[1] = dstAspect / srcAspect;
+            place[1] = dstAspect / srcAspect;
         }
 
         MTLRenderPassDescriptor *rp = [MTLRenderPassDescriptor renderPassDescriptor];
@@ -325,11 +376,25 @@ static int sync_shadow(uint8_t *shadow, const uint8_t *px, uint32_t w, uint32_t 
         id<MTLCommandBuffer> cb = [queue commandBuffer];
         id<MTLRenderCommandEncoder> enc = [cb renderCommandEncoderWithDescriptor:rp];
         [enc setRenderPipelineState:pipeline];
-        [enc setVertexBytes:scale length:sizeof(scale) atIndex:0];
+        [enc setVertexBytes:place length:sizeof(place) atIndex:0];
         uint32_t nearest = (uint32_t)atomic_load(&g_fb_nearest);
         [enc setFragmentBytes:&nearest length:sizeof nearest atIndex:0];
         [enc setFragmentTexture:texture atIndex:0];
         [enc drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
+        if (cursorOn && cursorPipeline && cursorTexture) {
+            /* The image's hot spot sits at (cursorX, cursorY) of the picture. */
+            float half = (float)HV_FB_CURSOR_SIZE / 2.0f;
+            float cx = ((float)cursorX - (float)hotX + half) / (float)w;
+            float cy = ((float)cursorY - (float)hotY + half) / (float)h;
+            float cplace[4] = {
+                place[0] * (float)HV_FB_CURSOR_SIZE / (float)w, place[1] * (float)HV_FB_CURSOR_SIZE / (float)h,
+                place[0] * (cx * 2.0f - 1.0f), place[1] * (1.0f - cy * 2.0f),
+            };
+            [enc setRenderPipelineState:cursorPipeline];
+            [enc setVertexBytes:cplace length:sizeof(cplace) atIndex:0];
+            [enc setFragmentTexture:cursorTexture atIndex:0];
+            [enc drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
+        }
         [enc endEncoding];
         [cb presentDrawable:drawable];
         [cb commit];
@@ -381,6 +446,24 @@ int hv_fb_save_png(HvFbDisplay *fb, const char *path) {
         for (uint32_t y = 0; y < h; y++) {
             uint8_t *row = copy + (size_t)y * stride;
             for (uint32_t x = 0; x < w; x++) row[x * 4 + 3] = 0xff;
+        }
+        /* Draw the adapter's pointer in, so a screenshot shows what the screen shows. */
+        {
+            static uint8_t cur[HV_FB_CURSOR_SIZE * HV_FB_CURSOR_SIZE * 4];
+            int on = 0;
+            int32_t cx = 0, cy = 0;
+            uint32_t hx = 0, hy = 0;
+            hv_fb_display_get_cursor(fb, cur, &on, &cx, &cy, &hx, &hy);
+            for (uint32_t j = 0; on && j < HV_FB_CURSOR_SIZE; j++) {
+                for (uint32_t i = 0; i < HV_FB_CURSOR_SIZE; i++) {
+                    int64_t px_x = (int64_t)cx - hx + i, px_y = (int64_t)cy - hy + j;
+                    if (px_x < 0 || px_y < 0 || px_x >= w || px_y >= h) continue;
+                    const uint8_t *sp = cur + (j * HV_FB_CURSOR_SIZE + i) * 4;
+                    uint8_t *dp = copy + (size_t)px_y * stride + (size_t)px_x * 4;
+                    uint32_t a = sp[3];
+                    for (int k = 0; k < 3; k++) dp[k] = (uint8_t)((sp[k] * a + dp[k] * (255 - a)) / 255);
+                }
+            }
         }
 
         CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();

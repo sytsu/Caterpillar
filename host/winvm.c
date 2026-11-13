@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "winvm.h"
+#include "virtio_gpu.h"
 
 #include <CoreFoundation/CoreFoundation.h>
 #include <TargetConditionals.h>
@@ -194,8 +195,10 @@ int hv_winvm_create(const HvWinVmConfig *c, char *err, size_t errlen) {
         uint32_t fbw = c->fb_width, fbh = c->fb_height;
         const char *res = getenv("HV_RES"); /* "WxH" override for tests */
         if (res) sscanf(res, "%ux%u", &fbw, &fbh);
-        if (fbw >= 640 && fbh >= 480 && fbw <= 4096 && fbh <= 4096)
+        if (fbw >= 640 && fbh >= 480 && fbw <= 4096 && fbh <= 4096) {
             hv_fw_cfg_set_gop_mode(board.fw_cfg, fbw & ~7u, fbh & ~1u);
+            hv_virtio_gpu_set_size(board.gpu, fbw & ~7u, fbh & ~1u);
+        }
     }
 
     share_on = 0;

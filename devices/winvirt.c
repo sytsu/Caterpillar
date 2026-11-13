@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "winvirt.h"
+#include "virtio_gpu.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -208,6 +209,8 @@ int hv_winvirt_create(HvWinVirt *b, HvMachine *m, HvCpu *cpu, int ncpus, uint64_
     b->usb = hv_xhci_create(m, b->pcie);
     b->hda = hv_hda_create(m, b->pcie);
     if (disk1) b->nvme1 = hv_nvme_create(m, b->pcie, disk1, "WIN11INST");
+    /* Last, so the slots of the devices above (and the boot entries that name them) stay put. */
+    if (!getenv("HV_NO_GPU")) b->gpu = hv_virtio_gpu_create(m, b->pcie, b->fb);
     (void)enable_sound;
 
     m->tick = tick;

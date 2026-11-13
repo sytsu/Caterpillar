@@ -40,6 +40,12 @@ struct SessionView: View {
             }
             .frame(width: full.width, height: full.height, alignment: .topLeading)
             .ignoresSafeArea()
+            .onChange(of: settings.fit) { _, _ in
+                if let plan = vm.plan, vm.guestSize.width > 0,
+                   abs(plan.aspect - vm.guestSize.width / vm.guestSize.height) > 0.02 {
+                    show("Applies the next time Windows starts")
+                }
+            }
         }
         .ignoresSafeArea(.keyboard)
         .persistentSystemOverlays(.hidden)
@@ -97,6 +103,9 @@ struct SessionView: View {
         let keepClear = settings.fit == .safe && side >= 44
         let area = keepClear ? CGRect(x: side, y: 0, width: full.width - 2 * side, height: full.height)
                              : CGRect(origin: .zero, size: full)
+        // Never stretched: Windows is started with a display of exactly this area's shape, so the
+        // picture fits it. (If the setting changed since Windows started, it fits as well as its
+        // shape allows until the next start.)
         let frame = fitted(in: area)
         let visibleHeight = full.height - keyboardHeight
         let lift = (keyboardHeight > 0 && !showsTop) ? max(0, frame.maxY - visibleHeight) : 0
@@ -113,11 +122,38 @@ struct SessionView: View {
 
         // With the keyboard up there is no room for the column; the key bar has what is needed.
         if keyboardHeight == 0, vm.phase == .running {
-            controls(vertical: true)
-                .opacity(margin >= columnWidth ? 1 : 0.7)
+            let floating = margin < columnWidth
+            if floating, settings.controlsFolded {
+                // Over the picture the column hides part of Windows, so it folds down to a tab.
+                Button {
+                    withAnimation(.easeOut(duration: 0.2)) { settings.controlsFolded = false }
+                } label: {
+                    Image(systemName: cameraOnLeft ? "chevron.compact.left" : "chevron.compact.right")
+                        .font(.system(size: 20, weight: .medium))
+                        .foregroundStyle(.white)
+                        .frame(width: 22, height: 56)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .glass(in: Capsule(), interactive: true)
+                .opacity(0.75)
+                .accessibilityLabel("Show controls")
+                .frame(width: 22, height: full.height)
+                .offset(x: cameraOnLeft ? full.width - 22 - 6 : 6, y: 0)
+                .transition(.opacity)
+            } else {
+                VStack(spacing: 12) {
+                    controls(vertical: true)
+                    if floating {
+                        GlassButton(symbol: cameraOnLeft ? "chevron.right" : "chevron.left", label: "Hide controls") {
+                            withAnimation(.easeOut(duration: 0.2)) { settings.controlsFolded = true }
+                        }
+                    }
+                }
                 .frame(width: columnWidth, height: full.height)
                 .offset(x: columnX - columnWidth / 2, y: 0)
                 .transition(.opacity)
+            }
         }
     }
 
@@ -309,7 +345,7 @@ struct SessionView: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text("Windows is set to a smaller desktop")
                     .font(.footnote.weight(.semibold))
-                Text("To fill the screen, open Settings › System › Display in Windows and set Display resolution to \(vm.guestSize.width > 0 ? "\(Int(vm.guestSize.width)) × \(Int(vm.guestSize.height))" : "the recommended size"). Touch stays lined up meanwhile.")
+                Text("Windows has no driver for Caterpillar's display, so it reuses an old desktop size. Install the virtio-win display driver (viogpudo) in Windows and it will always match the screen. Until then: Settings › System › Display › Display resolution › \(vm.guestSize.width > 0 ? "\(Int(vm.guestSize.width)) × \(Int(vm.guestSize.height))" : "the recommended size"). Touch stays lined up meanwhile.")
                     .font(.caption)
                     .foregroundStyle(Palette.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
